@@ -25,7 +25,7 @@ class CrossPlatformBot:
         self.CHANNEL_LINK = "https://t.me/pspgamers5"
         
         # ADMIN USER IDs - Replace these with actual user IDs
-        self.ADMIN_IDS = [1234567890, 0987654321]
+        self.ADMIN_IDS = [1234567890, 1237654321]
         
         # Mini-games state management
         self.guess_games = {}  # {user_id: {'target': number, 'attempts': count}}
@@ -2416,7 +2416,13 @@ Have fun! 🎉"""
                 print(f"❌ Main loop error: {e}")
                 time.sleep(5)
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+# Get token from environment variables
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+
+if not BOT_TOKEN:
+    print("❌ ERROR: BOT_TOKEN environment variable not set!")
+    print("💡 Please set BOT_TOKEN in Render.com environment variables")
+    exit(1)
 
 if __name__ == "__main__":
     bot = CrossPlatformBot(BOT_TOKEN)
