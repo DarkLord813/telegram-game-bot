@@ -2416,8 +2416,25 @@ Have fun! 🎉"""
                 print(f"❌ Main loop error: {e}")
                 time.sleep(5)
 
-BOT_TOKEN = "8124426206:AAEanHMN1eOV5LkaEWESNRhCTsVGJ89AiPk"
 
 if __name__ == "__main__":
+    bot = CrossPlatformBot(BOT_TOKEN)
+    bot.run()
+    import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+def get_bot_token():
+    """Safely get bot token from environment"""
+    token = os.getenv('BOT_TOKEN')
+    if not token:
+        raise ValueError("❌ BOT_TOKEN not found in environment variables")
+    return token
+
+if __name__ == "__main__":
+    # Get token securely from environment
+    BOT_TOKEN = get_bot_token()
     bot = CrossPlatformBot(BOT_TOKEN)
     bot.run()
