@@ -16,7 +16,7 @@ print("TELEGRAM BOT - CROSS PLATFORM")
 print("Code Verification + Channel Join + Game Scanner")
 print("Admin Game Uploads Enabled + Forward Support + Game Search")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
-print("Admin Broadcast Messaging System")
+print("Admin Broadcast Messaging System + Keep-Alive Protection")
 print("=" * 50)
 
 # Health check server
@@ -82,6 +82,52 @@ def start_health_check():
     t.start()
     print("✅ Health check server started on port 8080")
 
+# ==================== KEEP-ALIVE SERVICE ====================
+
+class KeepAliveService:
+    def __init__(self, health_url=None):
+        self.health_url = health_url or f"http://localhost:{os.environ.get('PORT', 8080)}/health"
+        self.is_running = False
+        self.ping_count = 0
+        
+    def start(self):
+        """Start keep-alive service to prevent sleep"""
+        self.is_running = True
+        
+        def ping_loop():
+            while self.is_running:
+                try:
+                    self.ping_count += 1
+                    response = requests.get(self.health_url, timeout=10)
+                    
+                    if response.status_code == 200:
+                        print(f"✅ Keep-alive ping #{self.ping_count}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    else:
+                        print(f"❌ Keep-alive failed: Status {response.status_code}")
+                        
+                except requests.exceptions.ConnectionError:
+                    print(f"🔌 Keep-alive connection error - server may be starting")
+                except requests.exceptions.Timeout:
+                    print(f"⏰ Keep-alive timeout - retrying later")
+                except Exception as e:
+                    print(f"❌ Keep-alive error: {e}")
+                
+                # Wait 4 minutes (Render sleeps after 15 min inactivity)
+                # Ping every 4 minutes to stay active
+                time.sleep(240)  # 4 minutes
+        
+        thread = threading.Thread(target=ping_loop, daemon=True)
+        thread.start()
+        print(f"🔄 Keep-alive service started - pinging every 4 minutes")
+        print(f"🌐 Health endpoint: {self.health_url}")
+        
+    def stop(self):
+        """Stop keep-alive service"""
+        self.is_running = False
+        print("🛑 Keep-alive service stopped")
+
+# ==================== MAIN BOT CLASS ====================
+
 class CrossPlatformBot:
     def __init__(self, token):
         self.token = token
@@ -110,6 +156,9 @@ class CrossPlatformBot:
         self.consecutive_errors = 0
         self.max_consecutive_errors = 10
         
+        # Keep-alive service
+        self.keep_alive = None
+        
         self.setup_database()
         self.verify_database_schema()
         self.games_cache = {}
@@ -125,6 +174,25 @@ class CrossPlatformBot:
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
         print("📢 Admin broadcast messaging system enabled")
         print("🛡️  Crash protection enabled")
+        print("🔋 Keep-alive system ready")
+    
+    def start_keep_alive(self):
+        """Start the keep-alive service"""
+        try:
+            # Get the actual Render URL from environment or use local
+            render_url = os.environ.get('RENDER_URL')
+            if render_url:
+                health_url = f"{render_url}/health"
+            else:
+                health_url = f"http://localhost:{os.environ.get('PORT', 8080)}/health"
+            
+            self.keep_alive = KeepAliveService(health_url)
+            self.keep_alive.start()
+            print("🔋 Keep-alive service activated - bot will stay awake!")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to start keep-alive: {e}")
+            return False
     
     # ==================== BROADCAST MESSAGING SYSTEM ====================
     
@@ -416,6 +484,10 @@ Use the broadcast feature to send messages to all users."""
                 except:
                     pass
             
+            # Stop keep-alive
+            if self.keep_alive:
+                self.keep_alive.stop()
+            
             # Reset error counters
             self.error_count = 0
             self.consecutive_errors = 0
@@ -425,6 +497,10 @@ Use the broadcast feature to send messages to all users."""
             self.setup_database()
             self.verify_database_schema()
             self.update_games_cache()
+            
+            # Restart keep-alive
+            if self.keep_alive:
+                self.keep_alive.start()
             
             print("✅ Auto-restart completed successfully")
             
@@ -2581,6 +2657,7 @@ Have fun! 🎉"""
 • 🕒 Real-time Updates
 • 🎮 Mini-Games Entertainment
 • 📢 Admin Broadcast System
+• 🔋 Keep-Alive Protection
 
 Choose an option below:"""
                 self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
@@ -2887,6 +2964,23 @@ Have fun! 🎉"""
                         
                         self.robust_send_message(chat_id, debug_text)
                         return True
+                    elif text == '/keepalive' and self.is_admin(user_id):
+                        if self.keep_alive and self.keep_alive.is_running:
+                            status = "🟢 RUNNING"
+                            ping_count = self.keep_alive.ping_count
+                        else:
+                            status = "🔴 STOPPED"
+                            ping_count = 0
+                        
+                        keepalive_text = f"""🔋 <b>Keep-Alive Status</b>
+
+Status: {status}
+Ping Count: {ping_count}
+Health URL: {self.keep_alive.health_url if self.keep_alive else 'Not set'}
+
+This service pings the bot every 4 minutes to prevent sleep on free hosting."""
+                        self.robust_send_message(chat_id, keepalive_text)
+                        return True
                 
                 # Handle code verification
                 if text.isdigit() and len(text) == 6:
@@ -2910,7 +3004,7 @@ Have fun! 🎉"""
             print(f"❌ Process message error: {e}")
             return False
 
-    # ==================== CRASH-PROTECTED RUN METHOD ====================
+    # ==================== CRASH-PROTECTED RUN METHOD WITH KEEP-ALIVE ====================
 
     def run(self):
         """Main bot loop with comprehensive crash protection"""
@@ -2918,11 +3012,15 @@ Have fun! 🎉"""
             print("❌ Bot cannot start. Please check your token.")
             return
         
-        print("🤖 Bot is running with crash protection...")
+        # Start keep-alive service
+        self.start_keep_alive()
+        
+        print("🤖 Bot is running with full protection...")
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast")
-        print("🛡️  Auto-restart enabled")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /keepalive")
+        print("🛡️  Crash protection enabled")
+        print("🔋 Keep-alive system active")
         print("🛑 Press Ctrl+C to stop")
         
         offset = 0
@@ -2966,6 +3064,8 @@ Have fun! 🎉"""
                 
             except KeyboardInterrupt:
                 print("\n🛑 Bot stopped by user")
+                if self.keep_alive:
+                    self.keep_alive.stop()
                 break
             except Exception as e:
                 self.consecutive_errors += 1
@@ -3025,7 +3125,7 @@ if __name__ == "__main__":
         # Start health check server
         start_health_check()
         
-        print("🚀 Starting bot with crash protection and broadcast system...")
+        print("🚀 Starting bot with full protection systems...")
         
         # Main loop with restart capability
         restart_count = 0
