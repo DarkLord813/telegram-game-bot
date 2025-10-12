@@ -16,6 +16,7 @@ print("TELEGRAM BOT - CROSS PLATFORM")
 print("Code Verification + Channel Join + Game Scanner")
 print("Admin Game Uploads Enabled + Forward Support + Game Search")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
+print("Admin Broadcast Messaging System")
 print("=" * 50)
 
 # Health check server
@@ -52,7 +53,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging']
         }
     })
 
@@ -91,13 +92,17 @@ class CrossPlatformBot:
         self.CHANNEL_LINK = "https://t.me/pspgamers5"
         
         # ADMIN USER IDs
-        self.ADMIN_IDS = [7455473197, 7713922088]
+        self.ADMIN_IDS = [7475473197, 7713987088]
         
         # Mini-games state management
         self.guess_games = {}  # {user_id: {'target': number, 'attempts': count}}
         self.spin_games = {}   # {user_id: {'spins': count, 'last_spin': timestamp}}
         
-        # CRASH PROTECTION - ADDED
+        # Broadcast system
+        self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': ''}}
+        self.broadcast_stats = {}     # Store broadcast statistics
+        
+        # CRASH PROTECTION
         self.last_restart = time.time()
         self.error_count = 0
         self.max_errors = 25
@@ -118,8 +123,263 @@ class CrossPlatformBot:
         print("📤 Forwarded files support enabled")
         print("🔍 Game search feature enabled")
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
+        print("📢 Admin broadcast messaging system enabled")
         print("🛡️  Crash protection enabled")
     
+    # ==================== BROADCAST MESSAGING SYSTEM ====================
+    
+    def start_broadcast(self, user_id, chat_id):
+        """Start broadcast message creation"""
+        if not self.is_admin(user_id):
+            self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
+            return False
+            
+        self.broadcast_sessions[user_id] = {
+            'stage': 'waiting_message',
+            'message': '',
+            'chat_id': chat_id
+        }
+        
+        broadcast_info = """📢 <b>Admin Broadcast System</b>
+
+You can send messages to all bot subscribers.
+
+📝 <b>How to use:</b>
+1. Type your broadcast message
+2. Preview the message before sending
+3. Send to all users or cancel
+
+⚡ <b>Features:</b>
+• HTML formatting support
+• Preview before sending
+• Send to all verified users
+• Delivery statistics
+
+💡 <b>Type your broadcast message now:</b>"""
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "❌ Cancel Broadcast", "callback_data": "cancel_broadcast"}]
+            ]
+        }
+        
+        self.robust_send_message(chat_id, broadcast_info, keyboard)
+        return True
+    
+    def handle_broadcast_message(self, user_id, chat_id, text):
+        """Handle broadcast message input"""
+        if user_id not in self.broadcast_sessions:
+            return False
+            
+        session = self.broadcast_sessions[user_id]
+        
+        if session['stage'] == 'waiting_message':
+            # Store the message and show preview
+            session['stage'] = 'preview'
+            session['message'] = text
+            
+            preview_text = f"""📋 <b>Broadcast Preview</b>
+
+Your message:
+────────────────────
+{text}
+────────────────────
+
+📊 This message will be sent to all verified users.
+
+⚠️ <b>Please review carefully before sending!</b>"""
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Send to All Users", "callback_data": "confirm_broadcast"},
+                        {"text": "✏️ Edit Message", "callback_data": "edit_broadcast"}
+                    ],
+                    [
+                        {"text": "❌ Cancel", "callback_data": "cancel_broadcast"}
+                    ]
+                ]
+            }
+            
+            self.robust_send_message(chat_id, preview_text, keyboard)
+            return True
+            
+        return False
+    
+    def send_broadcast_to_all(self, user_id, chat_id):
+        """Send broadcast message to all verified users"""
+        if user_id not in self.broadcast_sessions:
+            return False
+            
+        session = self.broadcast_sessions[user_id]
+        message_text = session['message']
+        
+        # Get all verified users
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT user_id FROM users WHERE is_verified = 1')
+        users = cursor.fetchall()
+        
+        total_users = len(users)
+        if total_users == 0:
+            self.robust_send_message(chat_id, "❌ No verified users found to send broadcast.")
+            del self.broadcast_sessions[user_id]
+            return False
+        
+        # Send initial progress
+        progress_msg = self.robust_send_message(chat_id, 
+            f"📤 Starting broadcast...\n"
+            f"📊 Total users: {total_users}\n"
+            f"⏳ Sending messages..."
+        )
+        
+        success_count = 0
+        failed_count = 0
+        start_time = time.time()
+        
+        # Send to users with rate limiting
+        for i, (user_id_target,) in enumerate(users):
+            try:
+                # Add broadcast header
+                broadcast_message = f"📢 <b>Announcement from Admin</b>\n\n{message_text}\n\n────────────────────\n<i>This is an automated broadcast message</i>"
+                
+                if self.robust_send_message(user_id_target, broadcast_message):
+                    success_count += 1
+                else:
+                    failed_count += 1
+                
+                # Update progress every 10 messages
+                if (i + 1) % 10 == 0 or (i + 1) == total_users:
+                    progress = int((i + 1) * 100 / total_users)
+                    elapsed = time.time() - start_time
+                    eta = (elapsed / (i + 1)) * (total_users - (i + 1)) if (i + 1) > 0 else 0
+                    
+                    progress_text = f"""📤 <b>Broadcast Progress</b>
+
+📊 Progress: {i + 1}/{total_users} users
+{self.create_progress_bar(progress)} {progress}%
+
+✅ Successful: {success_count}
+❌ Failed: {failed_count}
+⏱️ Elapsed: {elapsed:.1f}s
+⏳ ETA: {eta:.1f}s
+
+Sending messages..."""
+                    
+                    self.robust_send_message(chat_id, progress_text)
+                
+                # Rate limiting to avoid hitting Telegram limits
+                time.sleep(0.1)
+                
+            except Exception as e:
+                failed_count += 1
+                print(f"❌ Broadcast error for user {user_id_target}: {e}")
+        
+        # Send final statistics
+        elapsed_total = time.time() - start_time
+        success_rate = (success_count / total_users) * 100 if total_users > 0 else 0
+        
+        stats_text = f"""✅ <b>Broadcast Completed!</b>
+
+📊 Final Statistics:
+• 📤 Total users: {total_users}
+• ✅ Successful: {success_count}
+• ❌ Failed: {failed_count}
+• 📈 Success rate: {success_rate:.1f}%
+• ⏱️ Total time: {elapsed_total:.1f}s
+• 🚀 Speed: {total_users/elapsed_total:.1f} users/second
+
+📝 Message sent to {success_count} users successfully."""
+
+        # Store broadcast statistics
+        broadcast_id = int(time.time())
+        self.broadcast_stats[broadcast_id] = {
+            'admin_id': user_id,
+            'timestamp': datetime.now().isoformat(),
+            'total_users': total_users,
+            'success_count': success_count,
+            'failed_count': failed_count,
+            'message_preview': message_text[:100] + "..." if len(message_text) > 100 else message_text
+        }
+        
+        self.robust_send_message(chat_id, stats_text)
+        
+        # Clean up session
+        del self.broadcast_sessions[user_id]
+        
+        return True
+    
+    def get_broadcast_stats(self, user_id, chat_id, message_id):
+        """Show broadcast statistics"""
+        if not self.is_admin(user_id):
+            return False
+            
+        if not self.broadcast_stats:
+            stats_text = """📊 <b>Broadcast Statistics</b>
+
+No broadcasts sent yet.
+
+Use the broadcast feature to send messages to all users."""
+        else:
+            total_broadcasts = len(self.broadcast_stats)
+            total_sent = sum(stats['success_count'] for stats in self.broadcast_stats.values())
+            total_failed = sum(stats['failed_count'] for stats in self.broadcast_stats.values())
+            total_users_reached = total_sent
+            
+            # Get recent broadcasts
+            recent_broadcasts = sorted(self.broadcast_stats.items(), key=lambda x: x[0], reverse=True)[:5]
+            
+            stats_text = f"""📊 <b>Broadcast Statistics</b>
+
+📈 Overview:
+• Total broadcasts: {total_broadcasts}
+• Total messages sent: {total_sent}
+• Total failed: {total_failed}
+• Unique users reached: {total_users_reached}
+
+📋 Recent broadcasts:"""
+            
+            for broadcast_id, stats in recent_broadcasts:
+                date = datetime.fromisoformat(stats['timestamp']).strftime('%Y-%m-%d %H:%M')
+                stats_text += f"\n• {date}: {stats['success_count']}/{stats['total_users']} users"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📢 New Broadcast", "callback_data": "start_broadcast"}],
+                [{"text": "🔄 Refresh Stats", "callback_data": "broadcast_stats"}],
+                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, stats_text, keyboard)
+    
+    def cancel_broadcast(self, user_id, chat_id, message_id):
+        """Cancel ongoing broadcast"""
+        if user_id in self.broadcast_sessions:
+            del self.broadcast_sessions[user_id]
+        
+        cancel_text = "❌ Broadcast cancelled."
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, cancel_text, keyboard)
+    
+    def create_broadcast_buttons(self):
+        """Create broadcast management buttons"""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "📢 New Broadcast", "callback_data": "start_broadcast"},
+                    {"text": "📊 Statistics", "callback_data": "broadcast_stats"}
+                ],
+                [
+                    {"text": "🔙 Back to Admin", "callback_data": "admin_panel"}
+                ]
+            ]
+        }
+
     # ==================== CRASH PROTECTION METHODS ====================
     
     def handle_error(self, error, context="general"):
@@ -1806,11 +2066,26 @@ The file is now available in the games browser and search!"""
                     {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"}
                 ],
                 [
-                    {"text": "📊 Profile", "callback_data": "profile"},
+                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
                     {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
                 ],
                 [
+                    {"text": "📊 Profile", "callback_data": "profile"},
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+    
+    def create_broadcast_panel_buttons(self):
+        """Create broadcast panel buttons"""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "📢 New Broadcast", "callback_data": "start_broadcast"},
+                    {"text": "📊 Statistics", "callback_data": "broadcast_stats"}
+                ],
+                [
+                    {"text": "🔙 Back to Admin", "callback_data": "admin_panel"}
                 ]
             ]
         }
@@ -1971,7 +2246,7 @@ Use this ID for admin verification if needed."""
         except Exception as e:
             print(f"Profile error: {e}")
 
-    # ==================== UPDATED CALLBACK HANDLER ====================
+    # ==================== UPDATED CALLBACK HANDLER WITH BROADCAST ====================
 
     def handle_callback_query(self, callback_query):
         try:
@@ -1986,6 +2261,64 @@ Use this ID for admin verification if needed."""
             
             self.answer_callback_query(callback_query['id'])
             
+            # Broadcast system callbacks
+            if data == "broadcast_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                broadcast_info = """📢 <b>Admin Broadcast System</b>
+
+Send messages to all bot subscribers.
+
+⚡ Features:
+• Send to all verified users
+• HTML formatting support
+• Preview before sending
+• Delivery statistics
+• Progress tracking
+
+Choose an option:"""
+                self.edit_message(chat_id, message_id, broadcast_info, self.create_broadcast_panel_buttons())
+                return
+                
+            elif data == "start_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.start_broadcast(user_id, chat_id)
+                return
+                
+            elif data == "broadcast_stats":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.get_broadcast_stats(user_id, chat_id, message_id)
+                return
+                
+            elif data == "confirm_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.send_broadcast_to_all(user_id, chat_id)
+                return
+                
+            elif data == "cancel_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.cancel_broadcast(user_id, chat_id, message_id)
+                return
+                
+            elif data == "edit_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                if user_id in self.broadcast_sessions:
+                    self.broadcast_sessions[user_id]['stage'] = 'waiting_message'
+                    self.edit_message(chat_id, message_id, "✏️ Please type your new broadcast message:", self.create_broadcast_panel_buttons())
+                return
+
             # Mini-games callbacks
             if data == "game_guess":
                 self.start_number_guess_game(user_id, chat_id)
@@ -2247,6 +2580,7 @@ Have fun! 🎉"""
 • 🔄 Forward Support
 • 🕒 Real-time Updates
 • 🎮 Mini-Games Entertainment
+• 📢 Admin Broadcast System
 
 Choose an option below:"""
                 self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
@@ -2290,6 +2624,7 @@ Choose an option below:"""
 • 🗃️ Update games cache
 • 🗑️ Clear all games
 • 🔍 Scan bot-uploaded games
+• 📢 Broadcast messages to users
 • 🔍 Monitor system status
 
 📊 Your Stats:
@@ -2470,7 +2805,7 @@ After joining, click the button below:"""
             print(f"❌ Code verification error: {e}")
             return False
 
-    # ==================== UPDATED MESSAGE PROCESSOR ====================
+    # ==================== UPDATED MESSAGE PROCESSOR WITH BROADCAST ====================
 
     def process_message(self, message):
         """Main message processing function"""
@@ -2482,6 +2817,10 @@ After joining, click the button below:"""
                 first_name = message['from']['first_name']
                 
                 print(f"💬 Message from {first_name} ({user_id}): {text}")
+                
+                # Handle broadcast messages from admins
+                if user_id in self.broadcast_sessions:
+                    return self.handle_broadcast_message(user_id, chat_id, text)
                 
                 # Handle mini-games input first
                 if user_id in self.guess_games:
@@ -2523,6 +2862,8 @@ Have fun! 🎉"""
                         return self.generate_random_number(user_id, chat_id)
                     elif text == '/spin' and self.is_user_completed(user_id):
                         return self.lucky_spin(user_id, chat_id)
+                    elif text == '/broadcast' and self.is_admin(user_id):
+                        return self.start_broadcast(user_id, chat_id)
                     elif text == '/cleargames' and self.is_admin(user_id):
                         self.clear_all_games(user_id, chat_id, message['message_id'])
                         return True
@@ -2580,7 +2921,7 @@ Have fun! 🎉"""
         print("🤖 Bot is running with crash protection...")
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast")
         print("🛡️  Auto-restart enabled")
         print("🛑 Press Ctrl+C to stop")
         
@@ -2684,7 +3025,7 @@ if __name__ == "__main__":
         # Start health check server
         start_health_check()
         
-        print("🚀 Starting bot with crash protection...")
+        print("🚀 Starting bot with crash protection and broadcast system...")
         
         # Main loop with restart capability
         restart_count = 0
