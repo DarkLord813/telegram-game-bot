@@ -51,6 +51,7 @@ A cross-platform Telegram bot for game distribution with mini-games integration.
 ## 📞 Support
 
 For issues and questions, please contact the bot admin.
+https://t.me/rexoronsaye
 
 ---
 **⭐ Star this repo if you find it useful!**
