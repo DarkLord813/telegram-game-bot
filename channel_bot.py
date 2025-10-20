@@ -12,12 +12,54 @@ from flask import Flask, jsonify
 from threading import Thread
 import traceback
 
-print("TELEGRAM BOT - CROSS PLATFORM")
-print("Code Verification + Channel Join + Game Scanner")
-print("Admin Game Uploads Enabled + Forward Support + Game Search")
-print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
-print("Admin Broadcast Messaging System + Keep-Alive Protection")
-print("=" * 50)
+print("=" * 60)
+print("🤖 TELEGRAM BOT - CROSS PLATFORM")
+print("🚀 RENDER DEPLOYMENT READY")
+print("=" * 60)
+
+# ==================== DEBUG INITIALIZATION ====================
+print("🔍 DEBUG: Starting initialization...")
+print(f"🔍 DEBUG: Python version: {sys.version}")
+print(f"🔍 DEBUG: Current directory: {os.getcwd()}")
+print(f"🔍 DEBUG: Files in directory: {os.listdir('.')}")
+
+# Try to get BOT_TOKEN early for debugging
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+print(f"🔍 DEBUG: BOT_TOKEN exists: {'YES' if BOT_TOKEN else 'NO'}")
+if BOT_TOKEN:
+    print(f"🔍 DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
+    print(f"🔍 DEBUG: Token length: {len(BOT_TOKEN)}")
+else:
+    print("❌ DEBUG: BOT_TOKEN is MISSING! Check Render Environment Variables")
+
+# Test critical imports
+try:
+    import requests
+    print("✅ DEBUG: requests import OK")
+except ImportError as e:
+    print(f"❌ DEBUG: requests import failed: {e}")
+
+try:
+    from telegram import Update
+    from telegram.ext import Application, CommandHandler, ContextTypes
+    print("✅ DEBUG: telegram imports OK")
+except ImportError as e:
+    print(f"❌ DEBUG: telegram imports failed: {e}")
+
+try:
+    import sqlite3
+    print("✅ DEBUG: sqlite3 import OK")
+except ImportError as e:
+    print(f"❌ DEBUG: sqlite3 import failed: {e}")
+
+try:
+    from flask import Flask, jsonify
+    print("✅ DEBUG: flask imports OK")
+except ImportError as e:
+    print(f"❌ DEBUG: flask imports failed: {e}")
+
+print("🔍 DEBUG: Starting Flask health server...")
+# ==================== END DEBUG ====================
 
 # Health check server
 app = Flask(__name__)
@@ -57,6 +99,21 @@ def home():
         }
     })
 
+@app.route('/debug')
+def debug_info():
+    """Debug endpoint to check bot status"""
+    try:
+        debug_info = {
+            'bot_token_set': bool(BOT_TOKEN),
+            'bot_token_length': len(BOT_TOKEN) if BOT_TOKEN else 0,
+            'flask_running': True,
+            'timestamp': datetime.now().isoformat(),
+            'environment_keys': list(os.environ.keys())  # Show environment variable names
+        }
+        return jsonify(debug_info), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 def run_health_server():
     """Run the health check server with error handling"""
     try:
@@ -80,7 +137,7 @@ def start_health_check():
     
     t = Thread(target=health_wrapper, daemon=True)
     t.start()
-    print("✅ Health check server started on port 8080")
+    print("✅ Health check server started")
 
 # ==================== KEEP-ALIVE SERVICE ====================
 
@@ -130,6 +187,10 @@ class KeepAliveService:
 
 class CrossPlatformBot:
     def __init__(self, token):
+        if not token:
+            print("❌ CRITICAL: No BOT_TOKEN provided!")
+            raise ValueError("BOT_TOKEN is required")
+            
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}/"
         
@@ -180,7 +241,7 @@ class CrossPlatformBot:
         """Start the keep-alive service"""
         try:
             # Get the actual Render URL from environment or use local
-            render_url = os.environ.get('RENDER_URL')
+            render_url = os.environ.get('RENDER_EXTERNAL_URL')
             if render_url:
                 health_url = f"{render_url}/health"
             else:
@@ -193,7 +254,7 @@ class CrossPlatformBot:
         except Exception as e:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
-    
+
     # ==================== BROADCAST MESSAGING SYSTEM ====================
     
     def start_broadcast(self, user_id, chat_id):
@@ -985,663 +1046,6 @@ Always available!
         }
         return keyboard
 
-    # ==================== IMPROVED ADMIN GAME MANAGEMENT ====================
-    
-    def clear_all_games(self, user_id, chat_id, message_id):
-        """Clear all games from database (admin only)"""
-        if not self.is_admin(user_id):
-            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
-            return
-        
-        try:
-            cursor = self.conn.cursor()
-            
-            # Count games before deletion
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            total_games_before = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1')
-            uploaded_games_before = cursor.fetchone()[0]
-            
-            # Delete all games
-            cursor.execute('DELETE FROM channel_games')
-            self.conn.commit()
-            
-            # Update cache
-            self.update_games_cache()
-            
-            clear_text = f"""🗑️ <b>All Games Cleared Successfully!</b>
-
-📊 Before clearing:
-• Total games: {total_games_before}
-• Admin uploaded: {uploaded_games_before}
-
-✅ After clearing:
-• All games removed from database
-• Cache updated
-• Ready for fresh start
-
-🔄 You can now upload new games or rescan the channel."""
-            
-            self.edit_message(chat_id, message_id, clear_text, self.create_admin_buttons())
-            
-            print(f"🗑️ Admin {user_id} cleared all games from database")
-            
-        except Exception as e:
-            error_text = f"❌ Error clearing games: {str(e)}"
-            self.edit_message(chat_id, message_id, error_text, self.create_admin_buttons())
-            print(f"❌ Clear games error: {e}")
-
-    # ==================== IMPROVED DOCUMENT UPLOAD METHODS ====================
-    
-    def handle_document_upload(self, message):
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            
-            if not self.is_admin(user_id):
-                print(f"❌ Non-admin user {user_id} attempted upload")
-                return False
-            
-            if 'document' not in message:
-                print("❌ No document in message")
-                return False
-            
-            doc = message['document']
-            file_name = doc.get('file_name', 'Unknown File')
-            file_size = doc.get('file_size', 0)
-            file_id = doc.get('file_id', '')
-            bot_message_id = message['message_id']
-            
-            print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
-            
-            # Check if it's a supported game file
-            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
-            if not any(file_name.lower().endswith(ext) for ext in game_extensions):
-                self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
-                print(f"❌ Unsupported file type: {file_name}")
-                return False
-            
-            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
-            upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Determine if this is a forwarded file
-            is_forwarded = 'forward_origin' in message
-            forward_info = ""
-            original_message_id = None
-            
-            if is_forwarded:
-                forward_origin = message['forward_origin']
-                if 'sender_user' in forward_origin:
-                    forward_user = forward_origin['sender_user']
-                    forward_name = forward_user.get('first_name', 'Unknown')
-                    forward_info = f"\n🔄 Forwarded from: {forward_name}"
-                elif 'chat' in forward_origin:
-                    forward_chat = forward_origin['chat']
-                    forward_title = forward_chat.get('title', 'Unknown Chat')
-                    forward_info = f"\n🔄 Forwarded from: {forward_title}"
-                
-                # Get original message ID for channel forwards
-                if 'chat' in forward_origin and forward_origin['chat']['type'] == 'channel':
-                    original_message_id = message.get('forward_from_message_id')
-                    print(f"📨 Forwarded from channel, original message ID: {original_message_id}")
-            
-            # Generate unique message ID for storage
-            if original_message_id:
-                storage_message_id = original_message_id
-            else:
-                # For bot-uploaded files, create a unique ID
-                storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
-            
-            # Prepare game info
-            game_info = {
-                'message_id': storage_message_id,
-                'file_name': file_name,
-                'file_type': file_type,
-                'file_size': file_size,
-                'upload_date': upload_date,
-                'category': self.determine_file_category(file_name),
-                'added_by': user_id,
-                'is_uploaded': 1,  # Mark as uploaded by admin
-                'is_forwarded': 1 if is_forwarded else 0,
-                'file_id': file_id,
-                'bot_message_id': bot_message_id  # Store the actual bot message ID
-            }
-            
-            # Store in database
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO channel_games 
-                (message_id, file_name, file_type, file_size, upload_date, category, 
-                 added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                game_info['message_id'],
-                game_info['file_name'],
-                game_info['file_type'],
-                game_info['file_size'],
-                game_info['upload_date'],
-                game_info['category'],
-                game_info['added_by'],
-                game_info['is_uploaded'],
-                game_info['is_forwarded'],
-                game_info['file_id'],
-                game_info['bot_message_id']
-            ))
-            self.conn.commit()
-            
-            # Update cache
-            self.update_games_cache()
-            
-            # Send confirmation
-            size = self.format_file_size(file_size)
-            source_type = "Channel Forward" if original_message_id else "Direct Upload"
-            
-            confirm_text = f"""✅ Game file added successfully!{forward_info}
-
-📁 File: <code>{file_name}</code>
-📦 Type: {file_type}
-📏 Size: {size}
-🗂️ Category: {game_info['category']}
-🕒 Added: {upload_date}
-📮 Source: {source_type}
-🆔 Storage ID: {storage_message_id}
-🤖 Bot Message ID: {bot_message_id}
-
-The file is now available in the games browser and search!"""
-            
-            self.robust_send_message(chat_id, confirm_text)
-            
-            print(f"✅ Successfully stored: {file_name} (Storage ID: {storage_message_id}, Bot Message ID: {bot_message_id})")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Upload error: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def handle_forwarded_message(self, message):
-        try:
-            user_id = message['from']['id']
-            
-            if not self.is_admin(user_id):
-                print(f"❌ Non-admin user {user_id} attempted forwarded upload")
-                return False
-            
-            # Check if this is a forwarded document
-            if 'forward_origin' not in message:
-                return False
-                
-            if 'document' not in message:
-                print("❌ Forwarded message has no document")
-                return False
-            
-            print(f"📨 Processing forwarded file from admin {user_id}")
-            return self.handle_document_upload(message)
-            
-        except Exception as e:
-            print(f"❌ Forwarded message processing error: {e}")
-            return False
-
-    def scan_bot_uploaded_games(self):
-        """Scan for game files uploaded directly to the bot by admins"""
-        try:
-            print("🔍 Scanning for bot-uploaded games...")
-            
-            # Get recent messages from the bot's chat
-            url = self.base_url + "getUpdates"
-            params = {"timeout": 10, "limit": 100}
-            response = requests.get(url, params=params, timeout=30)
-            result = response.json()
-            
-            if not result.get('ok'):
-                print(f"❌ Cannot get updates: {result.get('description')}")
-                return 0
-            
-            updates = result.get('result', [])
-            bot_games_found = 0
-            
-            for update in updates:
-                if 'message' in update:
-                    message = update['message']
-                    
-                    # Check if message is from admin and contains a document
-                    if (message.get('from', {}).get('id') in self.ADMIN_IDS and 
-                        'document' in message):
-                        
-                        doc = message['document']
-                        file_name = doc.get('file_name', '').lower()
-                        
-                        game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
-                        if any(file_name.endswith(ext) for ext in game_extensions):
-                            
-                            # Check if this game is already in database
-                            cursor = self.conn.cursor()
-                            cursor.execute('SELECT message_id FROM channel_games WHERE bot_message_id = ?', (message['message_id'],))
-                            existing_game = cursor.fetchone()
-                            
-                            if not existing_game:
-                                # Add to database
-                                file_type = file_name.split('.')[-1].upper()
-                                file_size = doc.get('file_size', 0)
-                                file_id = doc.get('file_id', '')
-                                upload_date = datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S')
-                                
-                                game_info = {
-                                    'message_id': int(time.time() * 1000) + random.randint(1000, 9999),
-                                    'file_name': doc.get('file_name', 'Unknown'),
-                                    'file_type': file_type,
-                                    'file_size': file_size,
-                                    'upload_date': upload_date,
-                                    'category': self.determine_file_category(file_name),
-                                    'added_by': message['from']['id'],
-                                    'is_uploaded': 1,
-                                    'is_forwarded': 0,
-                                    'file_id': file_id,
-                                    'bot_message_id': message['message_id']
-                                }
-                                
-                                cursor.execute('''
-                                    INSERT OR IGNORE INTO channel_games 
-                                    (message_id, file_name, file_type, file_size, upload_date, category, 
-                                     added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (
-                                    game_info['message_id'],
-                                    game_info['file_name'],
-                                    game_info['file_type'],
-                                    game_info['file_size'],
-                                    game_info['upload_date'],
-                                    game_info['category'],
-                                    game_info['added_by'],
-                                    game_info['is_uploaded'],
-                                    game_info['is_forwarded'],
-                                    game_info['file_id'],
-                                    game_info['bot_message_id']
-                                ))
-                                
-                                self.conn.commit()
-                                bot_games_found += 1
-                                print(f"✅ Found bot-uploaded game: {file_name}")
-            
-            if bot_games_found > 0:
-                print(f"✅ Added {bot_games_found} bot-uploaded games to database")
-            
-            return bot_games_found
-            
-        except Exception as e:
-            print(f"❌ Bot games scan error: {e}")
-            return 0
-
-    # ==================== IMPROVED FILE SENDING METHODS ====================
-    
-    def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
-        try:
-            print(f"📤 Sending game file: msg_id={message_id}, is_bot_file={is_bot_file}, file_id={file_id}")
-            
-            if is_bot_file:
-                # For bot-uploaded files, forward from the bot's chat
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": chat_id,  # Important: forward from current chat
-                    "message_id": message_id
-                }
-                
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print(f"✅ Successfully forwarded bot file {message_id}")
-                    return True
-                else:
-                    print(f"❌ Bot file forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id:
-                        return self.send_document_directly(chat_id, file_id)
-                    return False
-            else:
-                # For channel files, forward from channel
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": self.REQUIRED_CHANNEL,
-                    "message_id": message_id
-                }
-                
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print(f"✅ Successfully forwarded channel file {message_id}")
-                    return True
-                else:
-                    print(f"❌ Channel forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id and file_id != 'short':
-                        return self.send_document_directly(chat_id, file_id)
-                    else:
-                        # Try to get file_id from database
-                        cursor = self.conn.cursor()
-                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
-                        result_db = cursor.fetchone()
-                        if result_db and result_db[0]:
-                            return self.send_document_directly(chat_id, result_db[0])
-                    
-                    return False
-                
-        except Exception as e:
-            print(f"❌ Error sending game file: {e}")
-            return False
-
-    def send_document_directly(self, chat_id, file_id):
-        """Send document directly using file_id"""
-        try:
-            print(f"📤 Sending document directly with file_id: {file_id}")
-            
-            url = self.base_url + "sendDocument"
-            data = {
-                "chat_id": chat_id,
-                "document": file_id
-            }
-            
-            response = requests.post(url, data=data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                print(f"✅ Sent document directly using file_id to user {chat_id}")
-                return True
-            else:
-                print(f"❌ Direct send failed: {result.get('description')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error sending document directly: {e}")
-            return False
-
-    # ==================== SEARCH GAMES METHODS ====================
-    
-    def search_games(self, search_term, user_id):
-        search_term = search_term.lower().strip()
-        results = []
-        
-        total_steps = 5
-        progress_messages = [
-            "🔍 Starting search...",
-            "📁 Scanning database...",
-            "🔎 Matching files...",
-            "📊 Analyzing results...",
-            "✅ Search complete!"
-        ]
-        
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT message_id, file_name, file_type, file_size, upload_date, category, file_id, 
-                   bot_message_id, is_uploaded, is_forwarded
-            FROM channel_games 
-            WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
-        ''', (f'%{search_term}%', f'%{search_term}%'))
-        
-        all_games = cursor.fetchall()
-        
-        for step in range(total_steps):
-            progress = int((step + 1) * 100 / total_steps)
-            
-            if user_id in self.search_sessions:
-                self.search_sessions[user_id]['progress'] = progress
-                self.search_sessions[user_id]['message'] = progress_messages[step]
-            
-            time.sleep(0.3)
-            
-            if step == total_steps - 1:
-                for game in all_games:
-                    (message_id, file_name, file_type, file_size, upload_date, 
-                     category, file_id, bot_message_id, is_uploaded, is_forwarded) = game
-                    
-                    # More flexible matching
-                    if (search_term in file_name.lower() or 
-                        search_term.replace(' ', '').lower() in file_name.lower().replace(' ', '') or
-                        any(word in file_name.lower() for word in search_term.split())):
-                        results.append({
-                            'message_id': message_id,
-                            'file_name': file_name,
-                            'file_type': file_type,
-                            'file_size': file_size,
-                            'upload_date': upload_date,
-                            'category': category,
-                            'file_id': file_id,
-                            'bot_message_id': bot_message_id,
-                            'is_uploaded': is_uploaded,
-                            'is_forwarded': is_forwarded
-                        })
-        
-        return results
-    
-    def create_search_results_buttons(self, results, search_term, user_id, page=0):
-        results_per_page = 5
-        start_idx = page * results_per_page
-        end_idx = start_idx + results_per_page
-        page_results = results[start_idx:end_idx]
-        
-        keyboard = []
-        
-        for i, game in enumerate(page_results, start_idx + 1):
-            button_text = game['file_name']
-            if len(button_text) > 30:
-                button_text = button_text[:27] + "..."
-            
-            # Use bot_message_id for uploaded files, channel message_id for channel files
-            if game['is_uploaded'] == 1 and game['bot_message_id']:
-                # This is a file uploaded directly to the bot
-                message_id_to_send = game['bot_message_id']
-                is_bot_file = True
-            else:
-                # This is a file from the channel
-                message_id_to_send = game['message_id']
-                is_bot_file = False
-            
-            file_id_clean = str(game['file_id']).replace('-', '_').replace('=', 'eq')
-            callback_data = f"send_game_{message_id_to_send}_{file_id_clean}_{1 if is_bot_file else 0}"
-            
-            # Validate callback data length
-            if len(callback_data) > 64:
-                callback_data = f"send_game_{message_id_to_send}_short_{1 if is_bot_file else 0}"
-            
-            keyboard.append([{
-                "text": f"📁 {i}. {button_text}",
-                "callback_data": callback_data
-            }])
-        
-        pagination_buttons = []
-        if page > 0:
-            pagination_buttons.append({
-                "text": "⬅️ Previous",
-                "callback_data": f"search_page_{search_term}_{page-1}"
-            })
-        
-        if end_idx < len(results):
-            pagination_buttons.append({
-                "text": "Next ➡️",
-                "callback_data": f"search_page_{search_term}_{page+1}"
-            })
-        
-        if pagination_buttons:
-            keyboard.append(pagination_buttons)
-        
-        keyboard.append([
-            {"text": "🔍 New Search", "callback_data": "search_games"},
-            {"text": "📁 Browse All", "callback_data": "game_files"}
-        ])
-        
-        keyboard.append([
-            {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-        ])
-        
-        return {"inline_keyboard": keyboard}
-    
-    def handle_game_search(self, message):
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            search_term = message.get('text', '').strip()
-            first_name = message['from']['first_name']
-            
-            if not search_term:
-                return False
-            
-            if not self.is_user_verified(user_id):
-                self.robust_send_message(chat_id, "🔐 Please complete verification first with /start")
-                return True
-            
-            print(f"🔍 User {user_id} searching for: '{search_term}'")
-            
-            # Show initial search message
-            search_msg = self.robust_send_message(chat_id, 
-                f"🔍 Searching for: <code>{search_term}</code>\n\n"
-                f"{self.create_progress_bar(0)} 0%\n"
-                f"🕒 Starting search..."
-            )
-            
-            if not search_msg:
-                return False
-            
-            def perform_search():
-                try:
-                    results = self.search_games(search_term, user_id)
-                    
-                    progress_info = self.search_sessions.get(user_id, {})
-                    search_time = time.time() - progress_info.get('start_time', time.time())
-                    
-                    self.search_results[user_id] = {
-                        'results': results,
-                        'search_term': search_term,
-                        'timestamp': time.time()
-                    }
-                    
-                    print(f"🔍 Search completed: Found {len(results)} results for '{search_term}'")
-                    
-                    if results:
-                        results_text = f"✅ Search Complete! ({search_time:.1f}s)\n\n"
-                        results_text += f"🔍 Found {len(results)} results for: <code>{search_term}</code>\n\n"
-                        results_text += "📥 Click on any file below to download it:\n\n"
-                        
-                        for i, game in enumerate(results[:5], 1):
-                            size = self.format_file_size(game['file_size'])
-                            source = "🤖 Bot" if game['is_uploaded'] == 1 else "📢 Channel"
-                            results_text += f"{i}. <code>{game['file_name']}</code>\n"
-                            results_text += f"   📦 {game['file_type']} | 📏 {size} | 🗂️ {game['category']} | {source}\n\n"
-                        
-                        if len(results) > 5:
-                            results_text += f"📋 ... and {len(results) - 5} more files\n\n"
-                        
-                        results_text += "🔗 Click any file above to download it instantly!"
-                        
-                        buttons = self.create_search_results_buttons(results, search_term, user_id)
-                        print(f"🔍 Sending search results with {len(results)} games")
-                        
-                        self.robust_send_message(
-                            chat_id, 
-                            results_text, 
-                            buttons
-                        )
-                    else:
-                        results_text = f"❌ No results found for: <code>{search_term}</code>\n\n"
-                        results_text += "💡 Try:\n• Different keywords\n• Shorter search terms\n• Check spelling"
-                        results_text += "\n\n🔍 Try a new search:"
-                        
-                        self.robust_send_message(chat_id, results_text, self.create_search_buttons())
-                    
-                    if user_id in self.search_sessions:
-                        del self.search_sessions[user_id]
-                        
-                except Exception as e:
-                    print(f"❌ Search error: {e}")
-                    self.robust_send_message(chat_id, "❌ Search failed. Please try again.")
-                    if user_id in self.search_sessions:
-                        del self.search_sessions[user_id]
-            
-            search_thread = threading.Thread(target=perform_search, daemon=True)
-            search_thread.start()
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Search handler error: {e}")
-            return False
-
-    def determine_file_category(self, filename):
-        filename_lower = filename.lower()
-        
-        if filename_lower.endswith('.apk'):
-            return 'Android Games'
-        elif filename_lower.endswith('.iso'):
-            if 'psp' in filename_lower:
-                return 'PSP Games'
-            elif 'ps2' in filename_lower:
-                return 'PS2 Games'
-            elif 'ps1' in filename_lower or 'psx' in filename_lower:
-                return 'PS1 Games'
-            else:
-                return 'ISO Games'
-        elif filename_lower.endswith('.zip'):
-            if 'psp' in filename_lower:
-                return 'PSP Games'
-            elif 'gba' in filename_lower:
-                return 'GBA Games'
-            elif 'nes' in filename_lower:
-                return 'NES Games'
-            else:
-                return 'ZIP Games'
-        elif filename_lower.endswith('.7z'):
-            return '7Z Games'
-        elif filename_lower.endswith('.pkg'):
-            return 'PS Vita Games'
-        elif filename_lower.endswith('.cso') or filename_lower.endswith('.pbp'):
-            return 'PSP Games'
-        else:
-            return 'Other Games'
-    
-    def get_upload_stats(self, user_id=None):
-        try:
-            cursor = self.conn.cursor()
-            
-            if user_id:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = ? AND is_uploaded = 1
-                ''', (user_id,))
-            else:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM channel_games 
-                    WHERE is_uploaded = 1
-                ''')
-            
-            upload_count = cursor.fetchone()[0]
-            return upload_count
-        except:
-            return 0
-    
-    def get_forward_stats(self, user_id=None):
-        try:
-            cursor = self.conn.cursor()
-            
-            if user_id:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = ? AND is_uploaded = 1 AND is_forwarded = 1
-                ''', (user_id,))
-            else:
-                cursor.execute('''
-                    SELECT COUNT(*) FROM channel_games 
-                    WHERE is_uploaded = 1 AND is_forwarded = 1
-                ''')
-            
-            forward_count = cursor.fetchone()[0]
-            return forward_count
-        except:
-            return 0
-
     # ==================== DATABASE & SETUP METHODS ====================
     
     def get_db_path(self):
@@ -1699,6 +1103,7 @@ The file is now available in the games browser and search!"""
             
         except Exception as e:
             print(f"❌ Database error: {e}")
+            # Fallback to in-memory database
             self.conn = sqlite3.connect(':memory:', check_same_thread=False)
             self.setup_database()
     
@@ -1719,180 +1124,8 @@ The file is now available in the games browser and search!"""
         except Exception as e:
             print(f"❌ Connection error: {e}")
             return False
-    
-    def scan_channel_for_games(self):
-        """Enhanced scan that includes both channel and bot-uploaded games"""
-        if self.is_scanning:
-            return
-        
-        self.is_scanning = True
-        try:
-            print(f"🔍 Scanning {self.REQUIRED_CHANNEL} and bot-uploaded games...")
-            
-            channel_games_found = 0
-            bot_games_found = 0
-            
-            # Scan channel for games
-            url = self.base_url + "getChat"
-            data = {"chat_id": self.REQUIRED_CHANNEL}
-            response = requests.post(url, data=data, timeout=10)
-            result = response.json()
-            
-            if result.get('ok'):
-                url = self.base_url + "getChatHistory"
-                data = {
-                    "chat_id": self.REQUIRED_CHANNEL,
-                    "limit": 50
-                }
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    messages = result.get('result', [])
-                    game_files = []
-                    
-                    for message in messages:
-                        game_info = self.extract_game_info(message)
-                        if game_info:
-                            game_files.append(game_info)
-                    
-                    if game_files:
-                        self.store_games_in_db(game_files)
-                        channel_games_found = len(game_files)
-                        print(f"✅ Found {channel_games_found} channel game files")
-                    else:
-                        print("ℹ️ No game files found in channel messages")
-                else:
-                    print(f"❌ Cannot get channel messages: {result.get('description')}")
-            else:
-                print("❌ Bot needs to be admin in the channel")
-            
-            # Scan for bot-uploaded games
-            bot_games_found = self.scan_bot_uploaded_games()
-            
-            # Update cache
-            self.update_games_cache()
-            
-            total_games = channel_games_found + bot_games_found
-            print(f"🔄 Rescan complete! Found {total_games} total games ({channel_games_found} from channel, {bot_games_found} from bot uploads)")
-            
-            self.is_scanning = False
-            return total_games
-            
-        except Exception as e:
-            print(f"❌ Scan error: {e}")
-            self.is_scanning = False
-            return 0
-    
-    def extract_game_info(self, message):
-        try:
-            if 'document' in message:
-                doc = message['document']
-                file_name = doc.get('file_name', '').lower()
-                
-                game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
-                if any(file_name.endswith(ext) for ext in game_extensions):
-                    file_type = file_name.split('.')[-1].upper()
-                    upload_date = datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S')
-                    file_id = doc.get('file_id', '')
-                    
-                    return {
-                        'message_id': message['message_id'],
-                        'file_name': doc.get('file_name', 'Unknown'),
-                        'file_type': file_type,
-                        'file_size': doc.get('file_size', 0),
-                        'upload_date': upload_date,
-                        'category': self.determine_file_category(file_name),
-                        'added_by': 0,
-                        'is_uploaded': 0,
-                        'is_forwarded': 0,
-                        'file_id': file_id,
-                        'bot_message_id': None
-                    }
-            return None
-            
-        except Exception as e:
-            return None
-    
-    def store_games_in_db(self, game_files):
-        try:
-            cursor = self.conn.cursor()
-            for game in game_files:
-                cursor.execute('''
-                    INSERT OR IGNORE INTO channel_games 
-                    (message_id, file_name, file_type, file_size, upload_date, category, added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    game['message_id'],
-                    game['file_name'],
-                    game['file_type'],
-                    game['file_size'],
-                    game['upload_date'],
-                    game['category'],
-                    game.get('added_by', 0),
-                    game.get('is_uploaded', 0),
-                    game.get('is_forwarded', 0),
-                    game.get('file_id', ''),
-                    game.get('bot_message_id', None)
-                ))
-            self.conn.commit()
-        except Exception as e:
-            print(f"Database error: {e}")
-    
-    def update_games_cache(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT file_name, file_type, file_size, upload_date, category, is_uploaded FROM channel_games')
-            games = cursor.fetchall()
-            
-            self.games_cache = {
-                'zip': [], '7z': [], 'iso': [], 'apk': [], 'rar': [], 
-                'pkg': [], 'cso': [], 'pbp': [], 'recent': [], 'all': []
-            }
-            
-            for game in games:
-                file_name, file_type, file_size, upload_date, category, is_uploaded = game
-                game_info = {
-                    'file_name': file_name,
-                    'file_type': file_type,
-                    'file_size': file_size,
-                    'upload_date': upload_date,
-                    'category': category,
-                    'is_uploaded': is_uploaded
-                }
-                
-                file_type_lower = file_type.lower()
-                if file_type_lower in self.games_cache:
-                    self.games_cache[file_type_lower].append(game_info)
-                
-                self.games_cache['all'].append(game_info)
-            
-            print(f"🔄 Cache updated: {len(self.games_cache['all'])} games")
-            
-        except Exception as e:
-            print(f"Cache error: {e}")
-    
-    def format_file_size(self, size_bytes):
-        if size_bytes == 0:
-            return "0 B"
-        
-        size_names = ["B", "KB", "MB", "GB"]
-        i = 0
-        while size_bytes >= 1024 and i < len(size_names)-1:
-            size_bytes /= 1024.0
-            i += 1
-        
-        return f"{size_bytes:.1f} {size_names[i]}"
-    
-    def get_channel_stats(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            total_games = cursor.fetchone()[0]
-            
-            return {'total_games': total_games}
-        except:
-            return {'total_games': 0}
+
+    # ==================== VERIFICATION SYSTEM ====================
     
     def generate_code(self):
         return ''.join(secrets.choice('0123456789') for _ in range(6))
@@ -1945,7 +1178,7 @@ The file is now available in the games browser and search!"""
         except Exception as e:
             print(f"❌ Verification error: {e}")
             return False
-    
+
     def check_channel_membership(self, user_id):
         try:
             url = self.base_url + "getChatMember"
@@ -2001,737 +1234,9 @@ The file is now available in the games browser and search!"""
         except Exception as e:
             print(f"❌ Error checking completion: {e}")
             return False
+
+    # ==================== MESSAGE PROCESSING ====================
     
-    def send_message(self, chat_id, text, reply_markup=None):
-        """Original send_message - now uses robust version"""
-        return self.robust_send_message(chat_id, text, reply_markup)
-    
-    def edit_message(self, chat_id, message_id, text, reply_markup=None):
-        try:
-            url = self.base_url + "editMessageText"
-            data = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": "HTML"
-            }
-            if reply_markup:
-                data["reply_markup"] = json.dumps(reply_markup)
-            
-            response = requests.post(url, data=data, timeout=15)
-            return response.json().get('ok', False)
-        except Exception as e:
-            print(f"Edit message error: {e}")
-            return False
-    
-    def answer_callback_query(self, callback_query_id, text=None, show_alert=False):
-        try:
-            url = self.base_url + "answerCallbackQuery"
-            data = {"callback_query_id": callback_query_id}
-            if text:
-                data["text"] = text
-            if show_alert:
-                data["show_alert"] = True
-            requests.post(url, data=data, timeout=5)
-        except:
-            pass
-    
-    def get_updates(self, offset=None):
-        try:
-            url = self.base_url + "getUpdates"
-            params = {"timeout": 100, "offset": offset}
-            response = requests.get(url, params=params, timeout=110)
-            data = response.json()
-            return data.get('result', []) if data.get('ok') else []
-        except Exception as e:
-            print(f"Get updates error: {e}")
-            return []
-    
-    def create_channel_buttons(self):
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "📢 JOIN CHANNEL", "url": self.CHANNEL_LINK},
-                    {"text": "✅ VERIFY JOIN", "callback_data": "verify_channel"}
-                ]
-            ]
-        }
-        return keyboard
-    
-    def create_games_buttons(self):
-        stats = self.get_channel_stats()
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🎮 Mini Games", "callback_data": "mini_games"},
-                    {"text": f"📁 Game Files ({stats['total_games']})", "callback_data": "game_files"}
-                ],
-                [
-                    {"text": "🔍 Search Games", "callback_data": "search_games"}
-                ],
-                [
-                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-                ]
-            ]
-        }
-        return keyboard
-    
-    def create_game_files_buttons(self):
-        stats = self.get_channel_stats()
-        
-        psp_count = len(self.games_cache.get('cso', [])) + len(self.games_cache.get('pbp', []))
-        
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": f"📦 ZIP ({len(self.games_cache.get('zip', []))})", "callback_data": "game_zip"},
-                    {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})", "callback_data": "game_7z"}
-                ],
-                [
-                    {"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})", "callback_data": "game_iso"},
-                    {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})", "callback_data": "game_apk"}
-                ],
-                [
-                    {"text": f"🎮 PSP ({psp_count})", "callback_data": "game_psp"},
-                    {"text": f"📋 All ({stats['total_games']})", "callback_data": "game_all"}
-                ],
-                [
-                    {"text": "🔍 Search Games", "callback_data": "search_games"}
-                ],
-                [
-                    {"text": "🔄 Rescan", "callback_data": "rescan_games"}
-                ],
-                [
-                    {"text": "🔙 Back to Games", "callback_data": "games"}
-                ]
-            ]
-        }
-        return keyboard
-    
-    def create_main_menu_buttons(self):
-        stats = self.get_channel_stats()
-        keyboard = [
-            [
-                {"text": "📊 Profile", "callback_data": "profile"},
-                {"text": "🕒 Time", "callback_data": "time"}
-            ],
-            [
-                {"text": "📢 Channel", "callback_data": "channel_info"},
-                {"text": f"🎮 Games ({stats['total_games']})", "callback_data": "games"}
-            ],
-            [
-                {"text": "🔍 Search Games", "callback_data": "search_games"}
-            ]
-        ]
-        
-        keyboard.append([
-            {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
-        ])
-        
-        return {"inline_keyboard": keyboard}
-    
-    def create_admin_buttons(self):
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "📤 Upload Stats", "callback_data": "upload_stats"},
-                    {"text": "🔄 Update Cache", "callback_data": "update_cache"}
-                ],
-                [
-                    {"text": "📤 Upload Games", "callback_data": "upload_games_info"},
-                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"}
-                ],
-                [
-                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
-                ],
-                [
-                    {"text": "📊 Profile", "callback_data": "profile"},
-                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-                ]
-            ]
-        }
-    
-    def create_broadcast_panel_buttons(self):
-        """Create broadcast panel buttons"""
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "📢 New Broadcast", "callback_data": "start_broadcast"},
-                    {"text": "📊 Statistics", "callback_data": "broadcast_stats"}
-                ],
-                [
-                    {"text": "🔙 Back to Admin", "callback_data": "admin_panel"}
-                ]
-            ]
-        }
-    
-    def create_search_buttons(self):
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "🔍 New Search", "callback_data": "search_games"},
-                    {"text": "📁 Browse All", "callback_data": "game_files"}
-                ],
-                [
-                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-                ]
-            ]
-        }
-    
-    def handle_upload_stats(self, chat_id, message_id, user_id, first_name):
-        total_uploads = self.get_upload_stats()
-        user_uploads = self.get_upload_stats(user_id)
-        total_forwards = self.get_forward_stats()
-        user_forwards = self.get_forward_stats(user_id)
-        total_games = len(self.games_cache.get('all', []))
-        
-        # Count bot-uploaded games
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL')
-        bot_uploaded = cursor.fetchone()[0]
-        
-        stats_text = f"""👑 Admin Panel
-
-📊 Upload Statistics:
-• Your uploads: {user_uploads} files
-• Your forwarded: {user_forwards} files
-• Total bot uploads: {total_uploads} files
-• Bot-uploaded games: {bot_uploaded} files
-• Total forwarded: {total_forwards} files
-• Total games in database: {total_games}
-
-📤 Upload Methods:
-1. Send files directly to bot
-2. Forward files from channels/chats
-3. Use rescan to find existing bot uploads"""
-
-        self.edit_message(chat_id, message_id, stats_text, self.create_admin_buttons())
-
-    def handle_upload_games_info(self, chat_id, message_id, user_id, first_name):
-        upload_info = f"""📤 Upload Games - Admin Guide
-
-👋 Hello {first_name}!
-
-As an admin, you can upload game files in multiple ways:
-
-📁 Supported Formats:
-• ZIP files (.zip)
-• 7Z files (.7z) 
-• ISO files (.iso) - PSP, PS1, PS2 games
-• APK files (.apk) - Android games
-• RAR files (.rar)
-• PKG files (.pkg) - PS Vita games
-• CSO files (.cso) - PSP compressed ISO
-• PSP files (.pbp, .cs0)
-
-🔄 Method 1: Direct Upload
-1. Send the game file as a document to this bot
-2. The bot will automatically process and add it
-
-🔄 Method 2: Forward Files
-1. Find game files in any channel or chat
-2. Forward them to this bot
-3. The bot will process forwarded files automatically
-
-🔄 Method 3: Rescan Existing
-1. Click "Scan Bot Games" to find existing uploads
-2. The bot will scan recent messages for game files
-
-📊 Your stats:
-• Total uploads: {self.get_upload_stats(user_id)} files
-• Forwarded files: {self.get_forward_stats(user_id)} files"""
-
-        self.edit_message(chat_id, message_id, upload_info, self.create_admin_buttons())
-
-    def handle_search_games(self, chat_id, message_id, user_id, first_name):
-        # Update cache first to ensure we have latest data
-        self.update_games_cache()
-        
-        search_info = f"""🔍 Game Search
-
-👋 Hello {first_name}!
-
-Search for any game in our database:
-
-📝 How to Search:
-1. Simply type the game name
-2. The bot will search through {len(self.games_cache.get('all', []))} files
-3. Get instant results with download links
-
-💡 Search Tips:
-• Use specific game names
-• Try different keywords
-• Search is case-insensitive
-
-🎮 Example searches:
-• "GTA"
-• "God of War" 
-• "FIFA 2024"
-• "Minecraft"
-
-Type your game name now!"""
-
-        self.edit_message(chat_id, message_id, search_info, self.create_search_buttons())
-
-    def format_games_list(self, games, category):
-        if not games:
-            return f"❌ No {category.upper()} games found."
-        
-        text = f"📁 <b>{category.upper()} GAMES</b>\n\n"
-        text += f"📊 Found: {len(games)} files\n\n"
-        
-        for i, game in enumerate(games[:8], 1):
-            size = self.format_file_size(game['file_size'])
-            text += f"{i}. <code>{game['file_name']}</code>\n"
-            text += f"   📦 {game['file_type']} | 📏 {size} | 🗂️ {game.get('category', 'Unknown')}\n\n"
-        
-        text += "🔗 Visit: @pspgamers5"
-        return text
-
-    def handle_profile(self, chat_id, message_id, user_id, first_name):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                created_at, is_verified, joined_channel = result
-                profile_text = f"""👤 <b>User Profile</b>
-
-🆔 User ID: <code>{user_id}</code>
-👋 Name: {first_name}
-✅ Verified: {'Yes' if is_verified else 'No'}
-📢 Channel Joined: {'Yes' if joined_channel else 'No'}
-📅 Member Since: {created_at}
-
-💡 Your unique ID: <code>{user_id}</code>
-Use this ID for admin verification if needed."""
-            else:
-                profile_text = f"""👤 <b>User Profile</b>
-
-🆔 User ID: <code>{user_id}</code>
-👋 Name: {first_name}
-✅ Verified: No
-📢 Channel Joined: No
-
-💡 Complete verification with /start"""
-
-            self.edit_message(chat_id, message_id, profile_text, self.create_main_menu_buttons())
-            
-        except Exception as e:
-            print(f"Profile error: {e}")
-
-    # ==================== UPDATED CALLBACK HANDLER WITH BROADCAST ====================
-
-    def handle_callback_query(self, callback_query):
-        try:
-            data = callback_query['data']
-            message = callback_query['message']
-            chat_id = message['chat']['id']
-            message_id = message['message_id']
-            user_id = callback_query['from']['id']
-            first_name = callback_query['from']['first_name']
-            
-            print(f"📨 Callback: {data} from {first_name} ({user_id})")
-            
-            self.answer_callback_query(callback_query['id'])
-            
-            # Broadcast system callbacks
-            if data == "broadcast_panel":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                
-                broadcast_info = """📢 <b>Admin Broadcast System</b>
-
-Send messages to all bot subscribers.
-
-⚡ Features:
-• Send to all verified users
-• HTML formatting support
-• Preview before sending
-• Delivery statistics
-• Progress tracking
-
-Choose an option:"""
-                self.edit_message(chat_id, message_id, broadcast_info, self.create_broadcast_panel_buttons())
-                return
-                
-            elif data == "start_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.start_broadcast(user_id, chat_id)
-                return
-                
-            elif data == "broadcast_stats":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.get_broadcast_stats(user_id, chat_id, message_id)
-                return
-                
-            elif data == "confirm_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.send_broadcast_to_all(user_id, chat_id)
-                return
-                
-            elif data == "cancel_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.cancel_broadcast(user_id, chat_id, message_id)
-                return
-                
-            elif data == "edit_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                if user_id in self.broadcast_sessions:
-                    self.broadcast_sessions[user_id]['stage'] = 'waiting_message'
-                    self.edit_message(chat_id, message_id, "✏️ Please type your new broadcast message:", self.create_broadcast_panel_buttons())
-                return
-
-            # Mini-games callbacks
-            if data == "game_guess":
-                self.start_number_guess_game(user_id, chat_id)
-                return
-                
-            elif data == "game_random":
-                self.generate_random_number(user_id, chat_id)
-                return
-                
-            elif data == "game_spin":
-                self.lucky_spin(user_id, chat_id)
-                return
-                
-            elif data == "big_spin":
-                self.big_spin(user_id, chat_id)
-                return
-                
-            elif data.startswith("random_"):
-                range_type = data.replace("random_", "")
-                self.generate_custom_random(user_id, chat_id, range_type)
-                return
-                
-            elif data == "mini_stats":
-                self.show_mini_games_stats(user_id, chat_id, message_id)
-                return
-                
-            elif data.startswith("quick_guess_"):
-                guess = int(data.replace("quick_guess_", ""))
-                self.handle_guess_input(user_id, chat_id, str(guess))
-                return
-                
-            elif data == "quick_numbers":
-                # Show quick number buttons
-                quick_buttons = []
-                row = []
-                for i in range(1, 11):
-                    row.append({"text": str(i), "callback_data": f"quick_guess_{i}"})
-                    if i % 5 == 0:
-                        quick_buttons.append(row)
-                        row = []
-                
-                keyboard = {"inline_keyboard": quick_buttons}
-                self.edit_message(chat_id, message_id, "🔢 Choose your guess quickly:", keyboard)
-                return
-
-            # Admin management callbacks
-            elif data == "clear_all_games":
-                self.clear_all_games(user_id, chat_id, message_id)
-                return
-                
-            elif data == "scan_bot_games":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                
-                self.edit_message(chat_id, message_id, "🔍 Scanning for bot-uploaded games...", self.create_admin_buttons())
-                bot_games_found = self.scan_bot_uploaded_games()
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, f"✅ Bot games scan complete! Found {bot_games_found} new games.", self.create_admin_buttons())
-                return
-
-            # Handle game file sending with proper message ID handling
-            if data.startswith('send_game_'):
-                parts = data.replace('send_game_', '').split('_')
-                if len(parts) >= 3:
-                    message_id_to_send = int(parts[0])
-                    file_id = parts[1] if len(parts) > 1 else None
-                    is_bot_file = int(parts[2]) == 1  # 1 for bot files, 0 for channel files
-                    
-                    # Clean file_id if it was shortened
-                    if file_id == 'short':
-                        file_id = None
-                    else:
-                        file_id = file_id.replace('_', '-').replace('eq', '=')
-                    
-                    self.answer_callback_query(callback_query['id'], "📥 Sending file...", False)
-                    
-                    if self.send_game_file(chat_id, message_id_to_send, file_id, is_bot_file):
-                        self.answer_callback_query(callback_query['id'], "✅ File sent!", False)
-                    else:
-                        self.answer_callback_query(callback_query['id'], "❌ Failed to send file. Please try again or contact admin.", True)
-                return
-            
-            elif data.startswith('search_page_'):
-                parts = data.replace('search_page_', '').split('_')
-                if len(parts) >= 2:
-                    search_term = parts[0]
-                    page = int(parts[1])
-                    
-                    user_results = self.search_results.get(user_id, {})
-                    if user_results and user_results.get('search_term') == search_term:
-                        results = user_results.get('results', [])
-                        
-                        results_text = f"🔍 Search Results: <code>{search_term}</code>\n\n"
-                        results_text += f"📄 Page {page + 1}\n"
-                        results_text += f"📊 Total results: {len(results)}\n\n"
-                        results_text += "📥 Click on any file below to download it:"
-                        
-                        self.edit_message(
-                            chat_id, 
-                            message_id, 
-                            results_text,
-                            self.create_search_results_buttons(results, search_term, user_id, page)
-                        )
-                return
-            
-            # Handle other existing callbacks
-            if data == "profile":
-                self.handle_profile(chat_id, message_id, user_id, first_name)
-                
-            elif data == "time":
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                time_text = f"🕒 <b>Current Time</b>\n\n📅 {current_time}\n\n⏰ Server Time (UTC)"
-                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons())
-                
-            elif data == "channel_info":
-                channel_info = f"""📢 <b>Channel Information</b>
-
-🏷️ Channel: @pspgamers5
-🔗 Link: https://t.me/pspgamers5
-📝 Description: PSP Games & More!
-
-🎮 Available Games:
-• PSP Games (ISO/CSO)
-• PS1 Games
-• Android Games (APK)
-• Emulator Games
-• And much more!
-
-📥 How to Download:
-1. Join our channel
-2. Browse available games
-3. Click on files to download
-
-⚠️ Note: You need to join channel and complete verification to access games."""
-                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons())
-                
-            elif data == "games":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
-                    return
-                
-                stats = self.get_channel_stats()
-                games_text = f"""🎮 <b>Games Section</b>
-
-📊 Total Games: {stats['total_games']}
-
-🎯 Choose an option below:
-
-• 📁 Game Files - Browse all available games
-• 🎮 Mini Games - Fun mini-games to play
-• 🔍 Search Games - Search for specific games
-
-🔗 Channel: @pspgamers5"""
-                self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
-                
-            elif data == "game_files":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_games_buttons())
-                    return
-                
-                stats = self.get_channel_stats()
-                files_text = f"""📁 <b>Game Files Browser</b>
-
-📊 Total Files: {stats['total_games']}
-
-📦 Browse by file type:
-
-• 📦 ZIP Files - Compressed game archives
-• 🗜️ 7Z Files - 7-Zip compressed archives  
-• 💿 ISO Files - Disc image files
-• 📱 APK Files - Android applications
-• 🎮 PSP Games - PSP specific formats
-• 📋 All Files - Complete game list
-
-🔍 Use search for quick access!"""
-                self.edit_message(chat_id, message_id, files_text, self.create_game_files_buttons())
-                
-            elif data == "mini_games":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_games_buttons())
-                    return
-                
-                games_text = """🎮 <b>Mini Games</b>
-
-🎯 Choose a game to play:
-
-• 🎯 Number Guess - Guess the random number (1-10)
-• 🎲 Random Number - Generate random numbers with analysis
-• 🎰 Lucky Spin - Spin for lucky symbols and coins
-• 📊 My Stats - View your gaming statistics
-
-Have fun! 🎉"""
-                self.edit_message(chat_id, message_id, games_text, self.create_mini_games_buttons())
-                
-            elif data == "search_games":
-                if not self.is_user_verified(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
-                    return
-                
-                self.handle_search_games(chat_id, message_id, user_id, first_name)
-                
-            elif data == "game_zip":
-                games = self.games_cache.get('zip', [])
-                text = self.format_games_list(games, "ZIP")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_7z":
-                games = self.games_cache.get('7z', [])
-                text = self.format_games_list(games, "7Z")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_iso":
-                games = self.games_cache.get('iso', [])
-                text = self.format_games_list(games, "ISO")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_apk":
-                games = self.games_cache.get('apk', [])
-                text = self.format_games_list(games, "APK")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_psp":
-                cso_games = self.games_cache.get('cso', [])
-                pbp_games = self.games_cache.get('pbp', [])
-                psp_games = cso_games + pbp_games
-                text = self.format_games_list(psp_games, "PSP")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_all":
-                games = self.games_cache.get('all', [])
-                text = self.format_games_list(games, "ALL")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "rescan_games":
-                self.edit_message(chat_id, message_id, "🔄 Scanning for new games...", self.create_game_files_buttons())
-                total_games = self.scan_channel_for_games()
-                stats = self.get_channel_stats()
-                self.edit_message(chat_id, message_id, f"✅ Rescan complete! Found {total_games} total games. Database now has {stats['total_games']} games.", self.create_game_files_buttons())
-            
-            elif data == "back_to_menu":
-                welcome_text = f"""👋 Welcome {first_name}!
-
-🤖 <b>Cross-Platform Telegram Bot</b>
-
-📊 Features:
-• 🎮 Game File Browser
-• 🔍 Advanced Game Search  
-• 📱 Cross-Platform Support
-• 📤 Admin Upload System
-• 🔄 Forward Support
-• 🕒 Real-time Updates
-• 🎮 Mini-Games Entertainment
-• 📢 Admin Broadcast System
-• 🔋 Keep-Alive Protection
-
-Choose an option below:"""
-                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
-            
-            elif data == "verify_channel":
-                if self.check_channel_membership(user_id):
-                    self.mark_channel_joined(user_id)
-                    welcome_text = f"""✅ <b>Verification Complete!</b>
-
-👋 Welcome {first_name}!
-
-🎉 You now have full access to:
-• 🎮 Game File Browser  
-• 🔍 Game Search
-• 📁 All Game Categories
-• 🕒 Real-time Updates
-• 🎮 Mini-Games
-
-📢 Channel: @pspgamers5
-Choose an option below:"""
-                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
-                else:
-                    self.edit_message(chat_id, message_id, 
-                                    "❌ You haven't joined the channel yet!\n\n"
-                                    "Please join @pspgamers5 first, then click Verify Join again.",
-                                    self.create_channel_buttons())
-            
-            elif data == "admin_panel":
-                if not self.is_admin(user_id):
-                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons())
-                    return
-                
-                admin_text = f"""👑 <b>Admin Panel</b>
-
-👋 Welcome {first_name}!
-
-🛠️ Admin Features:
-• 📤 Upload game files directly
-• 🔄 Process forwarded files  
-• 📊 View upload statistics
-• 🗃️ Update games cache
-• 🗑️ Clear all games
-• 🔍 Scan bot-uploaded games
-• 📢 Broadcast messages to users
-• 🔍 Monitor system status
-
-📊 Your Stats:
-• Total uploads: {self.get_upload_stats(user_id)}
-• Forwarded files: {self.get_forward_stats(user_id)}
-• Total games: {len(self.games_cache.get('all', []))}
-
-Choose an option:"""
-                self.edit_message(chat_id, message_id, admin_text, self.create_admin_buttons())
-            
-            elif data == "upload_stats":
-                if not self.is_admin(user_id):
-                    return
-                self.handle_upload_stats(chat_id, message_id, user_id, first_name)
-            
-            elif data == "upload_games_info":
-                if not self.is_admin(user_id):
-                    return
-                self.handle_upload_games_info(chat_id, message_id, user_id, first_name)
-            
-            elif data == "update_cache":
-                if not self.is_admin(user_id):
-                    return
-                self.edit_message(chat_id, message_id, "🔄 Updating games cache...", self.create_admin_buttons())
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, f"✅ Cache updated! {len(self.games_cache.get('all', []))} games loaded.", self.create_admin_buttons())
-                
-        except Exception as e:
-            print(f"Callback error: {e}")
-
     def handle_verification(self, message):
         """Handle /start command and send verification code"""
         try:
@@ -2882,8 +1387,6 @@ After joining, click the button below:"""
             print(f"❌ Code verification error: {e}")
             return False
 
-    # ==================== UPDATED MESSAGE PROCESSOR WITH BROADCAST ====================
-
     def process_message(self, message):
         """Main message processing function"""
         try:
@@ -2909,17 +1412,13 @@ After joining, click the button below:"""
                 if text.startswith('/'):
                     if text == '/start':
                         return self.handle_verification(message)
-                    elif text == '/scan' and self.is_admin(user_id):
-                        self.robust_send_message(chat_id, "🔄 Scanning channel and bot-uploaded games...")
-                        total_games = self.scan_channel_for_games()
-                        self.robust_send_message(chat_id, f"✅ Scan complete! Found {total_games} total games.")
-                        return True
                     elif text == '/menu' and self.is_user_completed(user_id):
-                        if self.is_admin(user_id):
-                            admin_text = f"👑 Admin Menu\n\nWelcome {first_name}!\n\nYou have admin privileges."
-                            self.robust_send_message(chat_id, admin_text, self.create_admin_buttons())
-                        else:
-                            self.robust_send_message(chat_id, f"🏠 Main Menu\n\nWelcome {first_name}!", self.create_main_menu_buttons())
+                        welcome_text = f"""👋 Welcome {first_name}!
+
+🤖 <b>Cross-Platform Telegram Bot</b>
+
+Choose an option below:"""
+                        self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
                         return True
                     elif text == '/minigames' and self.is_user_completed(user_id):
                         games_text = """🎮 <b>Mini Games</b>
@@ -2941,62 +1440,21 @@ Have fun! 🎉"""
                         return self.lucky_spin(user_id, chat_id)
                     elif text == '/broadcast' and self.is_admin(user_id):
                         return self.start_broadcast(user_id, chat_id)
-                    elif text == '/cleargames' and self.is_admin(user_id):
-                        self.clear_all_games(user_id, chat_id, message['message_id'])
-                        return True
-                    elif text == '/debug_uploads' and self.is_admin(user_id):
-                        cursor = self.conn.cursor()
-                        cursor.execute('''
-                            SELECT message_id, file_name, bot_message_id, is_uploaded, is_forwarded 
-                            FROM channel_games 
-                            WHERE is_uploaded = 1 
-                            ORDER BY id DESC 
-                            LIMIT 10
-                        ''')
-                        recent_uploads = cursor.fetchall()
-                        
-                        debug_text = "🔧 Recent Uploads Debug:\n\n"
-                        for upload in recent_uploads:
-                            msg_id, file_name, bot_msg_id, is_uploaded, is_forwarded = upload
-                            debug_text += f"📁 {file_name}\n"
-                            debug_text += f"   🆔: {msg_id} | 🤖: {bot_msg_id}\n"
-                            debug_text += f"   📤: {is_uploaded} | 🔄: {is_forwarded}\n\n"
-                        
-                        self.robust_send_message(chat_id, debug_text)
-                        return True
-                    elif text == '/keepalive' and self.is_admin(user_id):
-                        if self.keep_alive and self.keep_alive.is_running:
-                            status = "🟢 RUNNING"
-                            ping_count = self.keep_alive.ping_count
-                        else:
-                            status = "🔴 STOPPED"
-                            ping_count = 0
-                        
-                        keepalive_text = f"""🔋 <b>Keep-Alive Status</b>
+                    elif text == '/debug' and self.is_admin(user_id):
+                        debug_info = f"""🔧 Debug Information
 
-Status: {status}
-Ping Count: {ping_count}
-Health URL: {self.keep_alive.health_url if self.keep_alive else 'Not set'}
-
-This service pings the bot every 4 minutes to prevent sleep on free hosting."""
-                        self.robust_send_message(chat_id, keepalive_text)
+Bot Status: Running
+Token Set: {bool(self.token)}
+Health Server: Active
+Keep-Alive: {self.keep_alive.is_running if self.keep_alive else 'Not started'}
+Database: Connected
+"""
+                        self.robust_send_message(chat_id, debug_info)
                         return True
                 
                 # Handle code verification
                 if text.isdigit() and len(text) == 6:
                     return self.handle_code_verification(message)
-                
-                # Handle game search
-                if self.is_user_verified(user_id):
-                    return self.handle_game_search(message)
-            
-            # Handle document uploads from admins
-            if 'document' in message and self.is_admin(message['from']['id']):
-                return self.handle_document_upload(message)
-            
-            # Handle forwarded messages from admins
-            if 'forward_origin' in message and self.is_admin(message['from']['id']):
-                return self.handle_forwarded_message(message)
             
             return False
             
@@ -3004,7 +1462,298 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             print(f"❌ Process message error: {e}")
             return False
 
-    # ==================== CRASH-PROTECTED RUN METHOD WITH KEEP-ALIVE ====================
+    # ==================== BUTTON CREATION METHODS ====================
+    
+    def create_channel_buttons(self):
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "📢 JOIN CHANNEL", "url": self.CHANNEL_LINK},
+                    {"text": "✅ VERIFY JOIN", "callback_data": "verify_channel"}
+                ]
+            ]
+        }
+        return keyboard
+    
+    def create_main_menu_buttons(self):
+        keyboard = [
+            [
+                {"text": "📊 Profile", "callback_data": "profile"},
+                {"text": "🕒 Time", "callback_data": "time"}
+            ],
+            [
+                {"text": "📢 Channel", "callback_data": "channel_info"},
+                {"text": "🎮 Games", "callback_data": "games"}
+            ]
+        ]
+        
+        if self.is_admin(7475473197) or self.is_admin(7713987088):  # Your admin IDs
+            keyboard.append([
+                {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
+            ])
+        
+        return {"inline_keyboard": keyboard}
+
+    def create_admin_buttons(self):
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
+                    {"text": "📊 Stats", "callback_data": "upload_stats"}
+                ],
+                [
+                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+
+    def answer_callback_query(self, callback_query_id, text=None, show_alert=False):
+        try:
+            url = self.base_url + "answerCallbackQuery"
+            data = {"callback_query_id": callback_query_id}
+            if text:
+                data["text"] = text
+            if show_alert:
+                data["show_alert"] = True
+            requests.post(url, data=data, timeout=5)
+        except:
+            pass
+
+    def edit_message(self, chat_id, message_id, text, reply_markup=None):
+        try:
+            url = self.base_url + "editMessageText"
+            data = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
+            
+            response = requests.post(url, data=data, timeout=15)
+            return response.json().get('ok', False)
+        except Exception as e:
+            print(f"Edit message error: {e}")
+            return False
+
+    def handle_callback_query(self, callback_query):
+        try:
+            data = callback_query['data']
+            message = callback_query['message']
+            chat_id = message['chat']['id']
+            message_id = message['message_id']
+            user_id = callback_query['from']['id']
+            first_name = callback_query['from']['first_name']
+            
+            print(f"📨 Callback: {data} from {first_name} ({user_id})")
+            
+            self.answer_callback_query(callback_query['id'])
+            
+            # Broadcast system callbacks
+            if data == "broadcast_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                broadcast_info = """📢 <b>Admin Broadcast System</b>
+
+Send messages to all bot subscribers.
+
+⚡ Features:
+• Send to all verified users
+• HTML formatting support
+• Preview before sending
+• Delivery statistics
+• Progress tracking
+
+Choose an option:"""
+                self.edit_message(chat_id, message_id, broadcast_info, self.create_broadcast_buttons())
+                return
+                
+            elif data == "start_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.start_broadcast(user_id, chat_id)
+                return
+                
+            elif data == "broadcast_stats":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.get_broadcast_stats(user_id, chat_id, message_id)
+                return
+                
+            elif data == "confirm_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.send_broadcast_to_all(user_id, chat_id)
+                return
+                
+            elif data == "cancel_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.cancel_broadcast(user_id, chat_id, message_id)
+                return
+
+            # Mini-games callbacks
+            if data == "game_guess":
+                self.start_number_guess_game(user_id, chat_id)
+                return
+                
+            elif data == "game_random":
+                self.generate_random_number(user_id, chat_id)
+                return
+                
+            elif data == "game_spin":
+                self.lucky_spin(user_id, chat_id)
+                return
+                
+            elif data == "big_spin":
+                self.big_spin(user_id, chat_id)
+                return
+                
+            elif data.startswith("random_"):
+                range_type = data.replace("random_", "")
+                self.generate_custom_random(user_id, chat_id, range_type)
+                return
+                
+            elif data == "mini_stats":
+                self.show_mini_games_stats(user_id, chat_id, message_id)
+                return
+
+            # Handle other callbacks
+            if data == "profile":
+                profile_text = f"""👤 <b>User Profile</b>
+
+🆔 User ID: <code>{user_id}</code>
+👋 Name: {first_name}
+✅ Status: {'Verified' if self.is_user_completed(user_id) else 'Not verified'}
+
+Welcome to the bot!"""
+                self.edit_message(chat_id, message_id, profile_text, self.create_main_menu_buttons())
+                
+            elif data == "time":
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                time_text = f"🕒 <b>Current Time</b>\n\n📅 {current_time}\n\n⏰ Server Time"
+                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons())
+                
+            elif data == "channel_info":
+                channel_info = f"""📢 <b>Channel Information</b>
+
+🏷️ Channel: @pspgamers5
+🔗 Link: https://t.me/pspgamers5
+📝 Description: PSP Games & More!
+
+Join our channel for the latest game updates!"""
+                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons())
+                
+            elif data == "games":
+                if not self.is_user_completed(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_main_menu_buttons())
+                    return
+                
+                games_text = """🎮 <b>Games Section</b>
+
+🎯 Available Features:
+• Mini-Games (Number Guess, Lucky Spin, Random Number)
+• More features coming soon!
+
+Choose an option below:"""
+                self.edit_message(chat_id, message_id, games_text, self.create_mini_games_buttons())
+                
+            elif data == "mini_games":
+                if not self.is_user_completed(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_main_menu_buttons())
+                    return
+                
+                games_text = """🎮 <b>Mini Games</b>
+
+🎯 Choose a game to play:
+
+• 🎯 Number Guess - Guess the random number (1-10)
+• 🎲 Random Number - Generate random numbers with analysis
+• 🎰 Lucky Spin - Spin for lucky symbols and coins
+• 📊 My Stats - View your gaming statistics
+
+Have fun! 🎉"""
+                self.edit_message(chat_id, message_id, games_text, self.create_mini_games_buttons())
+                
+            elif data == "back_to_menu":
+                welcome_text = f"""👋 Welcome {first_name}!
+
+🤖 <b>Cross-Platform Telegram Bot</b>
+
+Choose an option below:"""
+                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+            
+            elif data == "verify_channel":
+                if self.check_channel_membership(user_id):
+                    self.mark_channel_joined(user_id)
+                    welcome_text = f"""✅ <b>Verification Complete!</b>
+
+👋 Welcome {first_name}!
+
+🎉 You now have full access to all features!"""
+                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+                else:
+                    self.edit_message(chat_id, message_id, 
+                                    "❌ You haven't joined the channel yet!\n\n"
+                                    "Please join @pspgamers5 first, then click Verify Join again.",
+                                    self.create_channel_buttons())
+            
+            elif data == "admin_panel":
+                if not self.is_admin(user_id):
+                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons())
+                    return
+                
+                admin_text = f"""👑 <b>Admin Panel</b>
+
+👋 Welcome {first_name}!
+
+🛠️ Admin Features:
+• 📢 Broadcast messages to users
+• 📊 View system statistics
+
+Choose an option:"""
+                self.edit_message(chat_id, message_id, admin_text, self.create_admin_buttons())
+            
+            elif data == "upload_stats":
+                if not self.is_admin(user_id):
+                    return
+                
+                stats_text = f"""📊 <b>System Statistics</b>
+
+🤖 Bot Status: Running
+🔋 Keep-Alive: Active
+📊 Total Users: Checking...
+🛡️ Crash Protection: Enabled
+
+All systems operational!"""
+                self.edit_message(chat_id, message_id, stats_text, self.create_admin_buttons())
+                
+        except Exception as e:
+            print(f"Callback error: {e}")
+
+    # ==================== BOT MAIN LOOP ====================
+
+    def get_updates(self, offset=None):
+        try:
+            url = self.base_url + "getUpdates"
+            params = {"timeout": 100, "offset": offset}
+            response = requests.get(url, params=params, timeout=110)
+            data = response.json()
+            return data.get('result', []) if data.get('ok') else []
+        except Exception as e:
+            print(f"Get updates error: {e}")
+            return []
 
     def run(self):
         """Main bot loop with comprehensive crash protection"""
@@ -3018,7 +1767,7 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("🤖 Bot is running with full protection...")
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /keepalive")
+        print("👑 Admin commands: /broadcast, /debug")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
         print("🛑 Press Ctrl+C to stop")
@@ -3080,72 +1829,46 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                     print(f"💤 Sleeping for {sleep_time} seconds before retry...")
                     time.sleep(sleep_time)
 
-# ==================== ENVIRONMENT VARIABLES CONFIG ====================
-
-# Try to load from .env file first
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ Loaded environment variables from .env file")
-except ImportError:
-    print("ℹ️ python-dotenv not installed, using system environment variables")
-
-# Get token from environment variables
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-
-if not BOT_TOKEN:
-    print("❌ ERROR: BOT_TOKEN environment variable not set!")
-    print("💡 Please set BOT_TOKEN in:")
-    print("   - Render.com environment variables")
-    print("   - OR create a .env file with BOT_TOKEN=your_token")
-    exit(1)
-
-# Test the token before starting
-def test_bot_connection(token):
-    try:
-        url = f"https://api.telegram.org/bot{token}/getMe"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if data.get('ok'):
-            bot_name = data['result']['first_name']
-            print(f"✅ Bot connected: {bot_name}")
-            return True
-        else:
-            print(f"❌ Invalid bot token: {data.get('description')}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Connection error: {e}")
-        return False
+# ==================== MAIN EXECUTION ====================
 
 if __name__ == "__main__":
-    print("🔍 Testing bot token...")
-    if test_bot_connection(BOT_TOKEN):
-        # Start health check server
-        start_health_check()
+    print("🚀 Starting Telegram Bot on Render...")
+    
+    # Start health server first
+    start_health_check()
+    print("✅ Health server started in background")
+    
+    # Wait a moment for health server to initialize
+    time.sleep(2)
+    
+    # Check if BOT_TOKEN is available
+    if not BOT_TOKEN:
+        print("❌ CRITICAL: BOT_TOKEN environment variable not set!")
+        print("💡 Please set BOT_TOKEN in Render Environment Variables")
+        print("💡 The health server will continue running for monitoring")
         
-        print("🚀 Starting bot with full protection systems...")
+        # Keep health server running even without bot token
+        while True:
+            time.sleep(10)
+    else:
+        print("✅ BOT_TOKEN found, starting bot...")
         
         # Main loop with restart capability
         restart_count = 0
-        max_restarts = 20
+        max_restarts = 10
         
         while restart_count < max_restarts:
             try:
+                print(f"🔄 Starting bot instance #{restart_count + 1}...")
                 bot = CrossPlatformBot(BOT_TOKEN)
                 bot.run()
             except Exception as e:
                 restart_count += 1
-                print(f"💥 Critical bot crash (#{restart_count}): {e}")
+                print(f"💥 Bot crash (#{restart_count}): {e}")
                 print("🔄 Restarting in 10 seconds...")
                 time.sleep(10)
             except KeyboardInterrupt:
                 print("\n🛑 Bot stopped by user")
                 break
         else:
-            print(f"❌ Maximum restarts ({max_restarts}) reached. Please check for underlying issues.")
-    else:
-        print("❌ Cannot start bot with invalid token")
-        print("💡 Check your BOT_TOKEN environment variable")
-        exit(1)
+            print(f"❌ Maximum restarts ({max_restarts}) reached. Bot stopped.")
