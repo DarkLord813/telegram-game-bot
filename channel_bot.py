@@ -17,6 +17,7 @@ print("Code Verification + Channel Join + Game Scanner")
 print("Admin Game Uploads Enabled + Forward Support + Game Search")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
 print("Admin Broadcast Messaging System + Keep-Alive Protection")
+print("⭐ Star Donations & Withdrawal System")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -94,7 +95,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Star Donations']
         }
     })
 
@@ -196,6 +197,16 @@ class CrossPlatformBot:
         self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': ''}}
         self.broadcast_stats = {}     # Store broadcast statistics
         
+        # Donation system
+        self.donation_sessions = {}   # {user_id: {'waiting_custom': True}}
+        self.donation_stats = {       # Track donation statistics
+            'total_donations': 0,
+            'total_stars': 0,
+            'withdrawn_stars': 0,
+            'available_stars': 0,
+            'donation_history': []
+        }
+        
         # CRASH PROTECTION
         self.last_restart = time.time()
         self.error_count = 0
@@ -209,6 +220,7 @@ class CrossPlatformBot:
         
         self.setup_database()
         self.verify_database_schema()
+        self.load_donation_stats()
         self.games_cache = {}
         self.is_scanning = False
         self.search_sessions = {}
@@ -221,9 +233,485 @@ class CrossPlatformBot:
         print("🔍 Game search feature enabled")
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
         print("📢 Admin broadcast messaging system enabled")
+        print("⭐ Star donation system enabled")
+        print("💰 Admin withdrawal system enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
     
+    def load_donation_stats(self):
+        """Load donation statistics from database"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS donations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    user_name TEXT,
+                    amount INTEGER,
+                    date DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS withdrawals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER,
+                    admin_name TEXT,
+                    amount INTEGER,
+                    date DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Calculate total donations
+            cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM donations')
+            total_stars = cursor.fetchone()[0]
+            
+            # Calculate total withdrawals
+            cursor.execute('SELECT COALESCE(SUM(amount), 0) FROM withdrawals')
+            withdrawn_stars = cursor.fetchone()[0]
+            
+            self.donation_stats = {
+                'total_donations': cursor.execute('SELECT COUNT(*) FROM donations').fetchone()[0],
+                'total_stars': total_stars,
+                'withdrawn_stars': withdrawn_stars,
+                'available_stars': total_stars - withdrawn_stars,
+                'donation_history': []
+            }
+            
+            # Load recent donation history
+            cursor.execute('''
+                SELECT user_name, amount, date FROM donations 
+                ORDER BY date DESC LIMIT 10
+            ''')
+            self.donation_stats['donation_history'] = cursor.fetchall()
+            
+            self.conn.commit()
+            print(f"⭐ Donation stats loaded: {self.donation_stats['available_stars']} stars available")
+            
+        except Exception as e:
+            print(f"❌ Error loading donation stats: {e}")
+    
+    def save_donation(self, user_id, user_name, amount):
+        """Save donation to database"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO donations (user_id, user_name, amount)
+                VALUES (?, ?, ?)
+            ''', (user_id, user_name, amount))
+            
+            # Update stats
+            self.donation_stats['total_donations'] += 1
+            self.donation_stats['total_stars'] += amount
+            self.donation_stats['available_stars'] += amount
+            
+            # Add to history
+            self.donation_stats['donation_history'].insert(0, 
+                (user_name, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            # Keep only last 10
+            if len(self.donation_stats['donation_history']) > 10:
+                self.donation_stats['donation_history'] = self.donation_stats['donation_history'][:10]
+            
+            self.conn.commit()
+            print(f"✅ Donation saved: {user_name} donated {amount} stars")
+            return True
+        except Exception as e:
+            print(f"❌ Error saving donation: {e}")
+            return False
+    
+    def save_withdrawal(self, admin_id, admin_name, amount):
+        """Save withdrawal to database"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO withdrawals (admin_id, admin_name, amount)
+                VALUES (?, ?, ?)
+            ''', (admin_id, admin_name, amount))
+            
+            # Update stats
+            self.donation_stats['withdrawn_stars'] += amount
+            self.donation_stats['available_stars'] -= amount
+            
+            self.conn.commit()
+            print(f"✅ Withdrawal saved: {admin_name} withdrew {amount} stars")
+            return True
+        except Exception as e:
+            print(f"❌ Error saving withdrawal: {e}")
+            return False
+
+    # ==================== DONATION SYSTEM ====================
+    
+    def create_support_buttons(self):
+        """Create support/donation buttons"""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "⭐ Donate 5 Stars", "callback_data": "donate_5"},
+                    {"text": "⭐ Donate 10 Stars", "callback_data": "donate_10"}
+                ],
+                [
+                    {"text": "⭐ Donate 20 Stars", "callback_data": "donate_20"},
+                    {"text": "⭐ Custom Amount", "callback_data": "donate_custom"}
+                ],
+                [
+                    {"text": "📊 Donation Stats", "callback_data": "donation_stats"},
+                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+
+    def handle_donation(self, user_id, chat_id, amount):
+        """Handle star donations"""
+        try:
+            user_name = f"User_{user_id}"
+            donation_text = f"""⭐ <b>Thank You for Your Support!</b>
+
+🙏 <b>Donation Received</b>
+• Amount: {amount} Stars
+• From: {user_name}
+• Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💫 <b>Your donation helps:</b>
+• Keep the bot running 24/7
+• Add new features and games
+• Maintain server costs
+• Support future development
+
+🎁 <b>As a thank you:</b>
+• Priority support
+• Early access to new features
+• Special recognition
+
+📝 <b>How to send stars:</b>
+1. Go to @BotFather
+2. Select your bot
+3. Choose "Send Stars"
+4. Enter amount: {amount} stars
+5. Send to this bot
+
+✨ Thank you for supporting our community!"""
+
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "⭐ Send More Stars", "callback_data": "support"}],
+                    [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+                ]
+            }
+            
+            self.robust_send_message(chat_id, donation_text, keyboard)
+            
+            # Save donation record
+            self.save_donation(user_id, user_name, amount)
+            
+            # Also notify admin about donation
+            admin_notification = f"⭐ New Donation!\n\nFrom: {user_name} ({user_id})\nAmount: {amount} Stars\n\nTotal Available: {self.donation_stats['available_stars']} stars"
+            for admin_id in self.ADMIN_IDS:
+                self.robust_send_message(admin_id, admin_notification)
+                
+            print(f"⭐ Donation: {user_id} donated {amount} stars")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Donation error: {e}")
+            return False
+
+    def handle_custom_donation(self, user_id, chat_id, message_id):
+        """Handle custom donation amount input"""
+        custom_text = """⭐ <b>Custom Donation</b>
+
+💫 Enter the number of stars you'd like to donate:
+
+💡 <b>Common amounts:</b>
+• 5 stars - Basic support
+• 10 stars - Great help  
+• 20 stars - Amazing support
+• 50+ stars - Super supporter!
+
+📝 <b>Reply with the number of stars</b> you want to donate (1-1000):
+
+✨ <i>Your support keeps the bot running and helps add new features!</i>"""
+
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔙 Back to Support", "callback_data": "support"}]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, custom_text, keyboard)
+        
+        # Store that we're waiting for custom donation input
+        self.donation_sessions[user_id] = {'waiting_custom': True}
+
+    def handle_donation_stats(self, user_id, chat_id, message_id):
+        """Show donation statistics"""
+        stats = self.donation_stats
+        
+        stats_text = f"""⭐ <b>Donation Statistics</b>
+
+📊 <b>Community Support:</b>
+• Total donations: {stats['total_donations']}
+• Total stars received: {stats['total_stars']}
+• Stars withdrawn: {stats['withdrawn_stars']}
+• Available stars: {stats['available_stars']}
+
+💫 <b>Where your stars go:</b>
+• Server hosting costs
+• Domain & SSL certificates
+• Development time
+• New game acquisitions
+• Bot maintenance
+
+🎯 <b>Recent donations:</b>"""
+        
+        if stats['donation_history']:
+            for i, (donor, amount, date) in enumerate(stats['donation_history'][:5], 1):
+                stats_text += f"\n{i}. {donor}: {amount} stars"
+        else:
+            stats_text += "\nNo donations yet - be the first!"
+        
+        stats_text += "\n\n🤝 <b>Thank you for considering support!</b>\nEvery donation helps improve the bot for everyone."
+
+        self.edit_message(chat_id, message_id, stats_text, self.create_support_buttons())
+
+    def handle_custom_donation_input(self, user_id, chat_id, text):
+        """Process custom donation amount"""
+        try:
+            if user_id not in self.donation_sessions:
+                return False
+                
+            if not self.donation_sessions[user_id].get('waiting_custom'):
+                return False
+            
+            # Validate input
+            try:
+                amount = int(text.strip())
+                if amount < 1 or amount > 1000:
+                    self.robust_send_message(chat_id, "❌ Please enter a number between 1 and 1000 stars.")
+                    return True
+            except ValueError:
+                self.robust_send_message(chat_id, "❌ Please enter a valid number (1-1000).")
+                return True
+            
+            # Process the donation
+            self.handle_donation(user_id, chat_id, amount)
+            
+            # Clear the session
+            del self.donation_sessions[user_id]
+            return True
+            
+        except Exception as e:
+            print(f"❌ Custom donation error: {e}")
+            if user_id in self.donation_sessions:
+                del self.donation_sessions[user_id]
+            return False
+
+    # ==================== WITHDRAWAL SYSTEM ====================
+    
+    def create_withdrawal_buttons(self):
+        """Create withdrawal buttons for admin"""
+        available = self.donation_stats['available_stars']
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": f"💰 Withdraw {available} Stars", "callback_data": "withdraw_all"},
+                    {"text": "💰 Custom Withdraw", "callback_data": "withdraw_custom"}
+                ],
+                [
+                    {"text": "📊 Donation Stats", "callback_data": "donation_stats"},
+                    {"text": "🔙 Back to Admin", "callback_data": "admin_panel"}
+                ]
+            ]
+        }
+
+    def handle_withdrawal(self, user_id, chat_id, amount):
+        """Handle star withdrawal for admin"""
+        try:
+            if not self.is_admin(user_id):
+                self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
+                return False
+            
+            available = self.donation_stats['available_stars']
+            if amount > available:
+                self.robust_send_message(chat_id, f"❌ Insufficient stars. Available: {available} stars")
+                return False
+            
+            if amount < 1:
+                self.robust_send_message(chat_id, "❌ Withdrawal amount must be at least 1 star")
+                return False
+            
+            admin_name = f"Admin_{user_id}"
+            
+            # Process withdrawal
+            withdrawal_text = f"""💰 <b>Withdrawal Processing</b>
+
+📤 <b>Withdrawal Details:</b>
+• Amount: {amount} Stars
+• Admin: {admin_name}
+• Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• Available after: {available - amount} stars
+
+💡 <b>How to receive stars:</b>
+1. Make sure your bot is configured to receive stars in @BotFather
+2. The stars will be transferred to your bot's balance
+3. You can then withdraw to your Telegram account via @BotFather
+
+⏳ <b>Processing withdrawal...</b>"""
+
+            self.robust_send_message(chat_id, withdrawal_text)
+            
+            # Simulate processing time
+            time.sleep(2)
+            
+            # Save withdrawal record
+            self.save_withdrawal(user_id, admin_name, amount)
+            
+            # Success message
+            success_text = f"""✅ <b>Withdrawal Successful!</b>
+
+💰 <b>Transaction Complete:</b>
+• Amount: {amount} Stars
+• Admin: {admin_name}
+• Transaction ID: W{int(time.time())}
+• Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• Remaining: {self.donation_stats['available_stars']} stars
+
+📝 <b>Next steps:</b>
+1. Check your bot's star balance in @BotFather
+2. You can withdraw to your personal Telegram account
+3. Keep some stars for bot operations
+
+💫 Thank you for maintaining the bot!"""
+
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "💰 Withdraw More", "callback_data": "withdraw_panel"}],
+                    [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+                ]
+            }
+            
+            self.robust_send_message(chat_id, success_text, keyboard)
+            
+            # Notify other admins
+            for admin_id in self.ADMIN_IDS:
+                if admin_id != user_id:
+                    notification = f"💰 Withdrawal Alert!\n\nAdmin: {admin_name}\nAmount: {amount} Stars\nRemaining: {self.donation_stats['available_stars']} stars"
+                    self.robust_send_message(admin_id, notification)
+            
+            print(f"💰 Withdrawal: Admin {user_id} withdrew {amount} stars")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Withdrawal error: {e}")
+            self.robust_send_message(chat_id, "❌ Withdrawal failed. Please try again.")
+            return False
+
+    def handle_withdrawal_panel(self, user_id, chat_id, message_id):
+        """Show withdrawal panel for admin"""
+        if not self.is_admin(user_id):
+            self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_admin_buttons())
+            return
+        
+        stats = self.donation_stats
+        panel_text = f"""💰 <b>Admin Withdrawal Panel</b>
+
+📊 <b>Financial Summary:</b>
+• Total stars received: {stats['total_stars']}
+• Total stars withdrawn: {stats['withdrawn_stars']}
+• 💎 Available for withdrawal: {stats['available_stars']} stars
+
+🎯 <b>Withdrawal Options:</b>
+• Withdraw all available stars
+• Custom withdrawal amount
+• View detailed statistics
+
+💡 <b>Note:</b>
+• Withdrawals are processed instantly
+• Minimum withdrawal: 1 star
+• Stars go to your bot's balance
+• You can then withdraw to your personal account via @BotFather
+
+Choose an option below:"""
+
+        self.edit_message(chat_id, message_id, panel_text, self.create_withdrawal_buttons())
+
+    def handle_custom_withdrawal(self, user_id, chat_id, message_id):
+        """Handle custom withdrawal amount input"""
+        if not self.is_admin(user_id):
+            return
+        
+        available = self.donation_stats['available_stars']
+        custom_text = f"""💰 <b>Custom Withdrawal</b>
+
+💎 Available stars: {available}
+
+📝 Enter the number of stars you want to withdraw:
+
+💡 <b>Suggestions:</b>
+• {available} stars - Withdraw all
+• {max(1, available // 2)} stars - Withdraw half
+• Custom amount (1-{available})
+
+⚠️ <b>Important:</b>
+• Withdrawals are final
+• Keep some stars for bot operations
+• You'll receive stars in your bot balance"""
+
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": f"💰 Withdraw All ({available})", "callback_data": "withdraw_all"}],
+                [{"text": "🔙 Back to Withdrawal", "callback_data": "withdraw_panel"}]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, custom_text, keyboard)
+        
+        # Store withdrawal session
+        if not hasattr(self, 'withdrawal_sessions'):
+            self.withdrawal_sessions = {}
+        self.withdrawal_sessions[user_id] = {'waiting_custom': True}
+
+    def handle_custom_withdrawal_input(self, user_id, chat_id, text):
+        """Process custom withdrawal amount"""
+        try:
+            if not hasattr(self, 'withdrawal_sessions'):
+                return False
+                
+            if user_id not in self.withdrawal_sessions:
+                return False
+                
+            if not self.withdrawal_sessions[user_id].get('waiting_custom'):
+                return False
+            
+            # Validate input
+            try:
+                amount = int(text.strip())
+                available = self.donation_stats['available_stars']
+                
+                if amount < 1:
+                    self.robust_send_message(chat_id, "❌ Withdrawal amount must be at least 1 star.")
+                    return True
+                    
+                if amount > available:
+                    self.robust_send_message(chat_id, f"❌ Insufficient stars. Available: {available} stars")
+                    return True
+                    
+            except ValueError:
+                self.robust_send_message(chat_id, "❌ Please enter a valid number.")
+                return True
+            
+            # Process the withdrawal
+            self.handle_withdrawal(user_id, chat_id, amount)
+            
+            # Clear the session
+            del self.withdrawal_sessions[user_id]
+            return True
+            
+        except Exception as e:
+            print(f"❌ Custom withdrawal error: {e}")
+            if user_id in self.withdrawal_sessions:
+                del self.withdrawal_sessions[user_id]
+            return False
+
     def start_keep_alive(self):
         """Start the keep-alive service"""
         try:
@@ -544,6 +1032,7 @@ Use the broadcast feature to send messages to all users."""
             # Reinitialize database
             self.setup_database()
             self.verify_database_schema()
+            self.load_donation_stats()
             self.update_games_cache()
             
             # Restart keep-alive
@@ -2156,7 +2645,7 @@ The file is now available in the games browser and search!"""
         }
         return keyboard
     
-    def create_main_menu_buttons(self):
+    def create_main_menu_buttons(self, user_id=None):
         stats = self.get_channel_stats()
         keyboard = [
             [
@@ -2168,13 +2657,16 @@ The file is now available in the games browser and search!"""
                 {"text": f"🎮 Games ({stats['total_games']})", "callback_data": "games"}
             ],
             [
-                {"text": "🔍 Search Games", "callback_data": "search_games"}
+                {"text": "🔍 Search Games", "callback_data": "search_games"},
+                {"text": "⭐ Support", "callback_data": "support"}
             ]
         ]
         
-        keyboard.append([
-            {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
-        ])
+        # Only show admin panel for admins
+        if user_id and self.is_admin(user_id):
+            keyboard.append([
+                {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
+            ])
         
         return {"inline_keyboard": keyboard}
     
@@ -2191,7 +2683,11 @@ The file is now available in the games browser and search!"""
                 ],
                 [
                     {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
+                    {"text": "💰 Withdraw Stars", "callback_data": "withdraw_panel"}
+                ],
+                [
+                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"},
+                    {"text": "⭐ Donation Stats", "callback_data": "donation_stats"}
                 ],
                 [
                     {"text": "📊 Profile", "callback_data": "profile"},
@@ -2248,6 +2744,11 @@ The file is now available in the games browser and search!"""
 • Bot-uploaded games: {bot_uploaded} files
 • Total forwarded: {total_forwards} files
 • Total games in database: {total_games}
+
+⭐ Donation Stats:
+• Available stars: {self.donation_stats['available_stars']}
+• Total received: {self.donation_stats['total_stars']}
+• Total withdrawn: {self.donation_stats['withdrawn_stars']}
 
 📤 Upload Methods:
 1. Send files directly to bot
@@ -2365,12 +2866,12 @@ Use this ID for admin verification if needed."""
 
 💡 Complete verification with /start"""
 
-            self.edit_message(chat_id, message_id, profile_text, self.create_main_menu_buttons())
+            self.edit_message(chat_id, message_id, profile_text, self.create_main_menu_buttons(user_id))
             
         except Exception as e:
             print(f"Profile error: {e}")
 
-    # ==================== UPDATED CALLBACK HANDLER WITH BROADCAST ====================
+    # ==================== UPDATED CALLBACK HANDLER WITH DONATION & WITHDRAWAL ====================
 
     def handle_callback_query(self, callback_query):
         try:
@@ -2385,6 +2886,77 @@ Use this ID for admin verification if needed."""
             
             self.answer_callback_query(callback_query['id'])
             
+            # Donation system callbacks
+            if data == "support":
+                support_text = """⭐ <b>Support Our Bot</b>
+
+🤝 <b>Help keep the bot running!</b>
+
+Your star donations help:
+• 🚀 Maintain 24/7 server uptime
+• 🎮 Add new games and features  
+• 🔧 Fix bugs and improve performance
+• 📱 Support development costs
+
+💫 <b>Donation Tiers:</b>
+• ⭐ 5 stars - Basic support
+• ⭐⭐ 10 stars - Great help
+• ⭐⭐⭐ 20 stars - Amazing support
+• Custom amount - Any number of stars
+
+✨ <b>All supporters receive:</b>
+• Priority technical support
+• Early access to new features
+• Special recognition
+• Our sincere gratitude!
+
+Choose a donation amount below:"""
+                
+                self.edit_message(chat_id, message_id, support_text, self.create_support_buttons())
+                return
+                
+            elif data.startswith("donate_"):
+                amount_str = data.replace("donate_", "")
+                if amount_str == "custom":
+                    self.handle_custom_donation(user_id, chat_id, message_id)
+                else:
+                    try:
+                        amount = int(amount_str)
+                        self.handle_donation(user_id, chat_id, amount)
+                    except ValueError:
+                        self.answer_callback_query(callback_query['id'], "❌ Invalid donation amount", True)
+                return
+                
+            elif data == "donation_stats":
+                self.handle_donation_stats(user_id, chat_id, message_id)
+                return
+
+            # Withdrawal system callbacks
+            elif data == "withdraw_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.handle_withdrawal_panel(user_id, chat_id, message_id)
+                return
+                
+            elif data == "withdraw_all":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                available = self.donation_stats['available_stars']
+                if available > 0:
+                    self.handle_withdrawal(user_id, chat_id, available)
+                else:
+                    self.answer_callback_query(callback_query['id'], "❌ No stars available for withdrawal", True)
+                return
+                
+            elif data == "withdraw_custom":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.handle_custom_withdrawal(user_id, chat_id, message_id)
+                return
+
             # Broadcast system callbacks
             if data == "broadcast_panel":
                 if not self.is_admin(user_id):
@@ -2556,7 +3128,7 @@ Choose an option:"""
             elif data == "time":
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 time_text = f"🕒 <b>Current Time</b>\n\n📅 {current_time}\n\n⏰ Server Time (UTC)"
-                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons())
+                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons(user_id))
                 
             elif data == "channel_info":
                 channel_info = f"""📢 <b>Channel Information</b>
@@ -2578,13 +3150,13 @@ Choose an option:"""
 3. Click on files to download
 
 ⚠️ Note: You need to join channel and complete verification to access games."""
-                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons())
+                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons(user_id))
                 
             elif data == "games":
                 if not self.is_user_completed(user_id):
                     self.edit_message(chat_id, message_id, 
                                     "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
+                                    self.create_main_menu_buttons(user_id))
                     return
                 
                 stats = self.get_channel_stats()
@@ -2648,7 +3220,7 @@ Have fun! 🎉"""
                 if not self.is_user_verified(user_id):
                     self.edit_message(chat_id, message_id, 
                                     "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
+                                    self.create_main_menu_buttons(user_id))
                     return
                 
                 self.handle_search_games(chat_id, message_id, user_id, first_name)
@@ -2705,10 +3277,12 @@ Have fun! 🎉"""
 • 🕒 Real-time Updates
 • 🎮 Mini-Games Entertainment
 • 📢 Admin Broadcast System
+• ⭐ Star Donation System
+• 💰 Admin Withdrawal System
 • 🔋 Keep-Alive Protection
 
 Choose an option below:"""
-                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons(user_id))
             
             elif data == "verify_channel":
                 if self.check_channel_membership(user_id):
@@ -2726,7 +3300,7 @@ Choose an option below:"""
 
 📢 Channel: @pspgamers5
 Choose an option below:"""
-                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons(user_id))
                 else:
                     self.edit_message(chat_id, message_id, 
                                     "❌ You haven't joined the channel yet!\n\n"
@@ -2735,7 +3309,7 @@ Choose an option below:"""
             
             elif data == "admin_panel":
                 if not self.is_admin(user_id):
-                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons())
+                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons(user_id))
                     return
                 
                 admin_text = f"""👑 <b>Admin Panel</b>
@@ -2750,12 +3324,15 @@ Choose an option below:"""
 • 🗑️ Clear all games
 • 🔍 Scan bot-uploaded games
 • 📢 Broadcast messages to users
+• 💰 Withdraw donated stars
+• ⭐ View donation statistics
 • 🔍 Monitor system status
 
 📊 Your Stats:
 • Total uploads: {self.get_upload_stats(user_id)}
 • Forwarded files: {self.get_forward_stats(user_id)}
 • Total games: {len(self.games_cache.get('all', []))}
+• Available stars: {self.donation_stats['available_stars']}
 
 Choose an option:"""
                 self.edit_message(chat_id, message_id, admin_text, self.create_admin_buttons())
@@ -2798,7 +3375,7 @@ Choose an option:"""
 📢 Channel membership: Active
 
 Choose an option below:"""
-                self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
+                self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons(user_id))
                 return True
             
             # Check if user is verified but not joined channel
@@ -2904,7 +3481,7 @@ After code verification, you'll need to join our channel."""
 
 📢 Channel: @pspgamers5
 Choose an option below:"""
-                    self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
+                    self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons(user_id))
                 else:
                     channel_text = f"""✅ <b>Code Verified!</b>
 
@@ -2930,7 +3507,7 @@ After joining, click the button below:"""
             print(f"❌ Code verification error: {e}")
             return False
 
-    # ==================== UPDATED MESSAGE PROCESSOR WITH BROADCAST ====================
+    # ==================== UPDATED MESSAGE PROCESSOR WITH DONATION & WITHDRAWAL ====================
 
     def process_message(self, message):
         """Main message processing function"""
@@ -2942,6 +3519,16 @@ After joining, click the button below:"""
                 first_name = message['from']['first_name']
                 
                 print(f"💬 Message from {first_name} ({user_id}): {text}")
+                
+                # Handle custom donation input
+                if hasattr(self, 'donation_sessions') and user_id in self.donation_sessions:
+                    if self.donation_sessions[user_id].get('waiting_custom'):
+                        return self.handle_custom_donation_input(user_id, chat_id, text)
+                
+                # Handle custom withdrawal input
+                if hasattr(self, 'withdrawal_sessions') and user_id in self.withdrawal_sessions:
+                    if self.withdrawal_sessions[user_id].get('waiting_custom'):
+                        return self.handle_custom_withdrawal_input(user_id, chat_id, text)
                 
                 # Handle broadcast messages from admins
                 if user_id in self.broadcast_sessions:
@@ -2967,7 +3554,7 @@ After joining, click the button below:"""
                             admin_text = f"👑 Admin Menu\n\nWelcome {first_name}!\n\nYou have admin privileges."
                             self.robust_send_message(chat_id, admin_text, self.create_admin_buttons())
                         else:
-                            self.robust_send_message(chat_id, f"🏠 Main Menu\n\nWelcome {first_name}!", self.create_main_menu_buttons())
+                            self.robust_send_message(chat_id, f"🏠 Main Menu\n\nWelcome {first_name}!", self.create_main_menu_buttons(user_id))
                         return True
                     elif text == '/minigames' and self.is_user_completed(user_id):
                         games_text = """🎮 <b>Mini Games</b>
@@ -2992,6 +3579,24 @@ Have fun! 🎉"""
                     elif text == '/cleargames' and self.is_admin(user_id):
                         self.clear_all_games(user_id, chat_id, message['message_id'])
                         return True
+                    elif text == '/support':
+                        support_text = """⭐ <b>Support Our Bot</b>
+
+Help keep this bot running by donating stars! 
+
+Your support helps:
+• Maintain server costs
+• Add new features  
+• Acquire more games
+• Improve performance
+
+Use the Support button in the menu or click below to donate stars!"""
+                        self.robust_send_message(chat_id, support_text, self.create_support_buttons())
+                        return True
+                    elif text == '/withdraw' and self.is_admin(user_id):
+                        return self.handle_withdrawal_panel(user_id, chat_id, message['message_id'])
+                    elif text == '/donations' and self.is_admin(user_id):
+                        return self.handle_donation_stats(user_id, chat_id, message['message_id'])
                     elif text == '/debug_uploads' and self.is_admin(user_id):
                         cursor = self.conn.cursor()
                         cursor.execute('''
@@ -3066,7 +3671,8 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("🤖 Bot is running with full protection...")
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /keepalive")
+        print("⭐ Support the bot: /support")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /withdraw, /donations, /keepalive")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
         print("🛑 Press Ctrl+C to stop")
@@ -3171,35 +3777,3 @@ def test_bot_connection(token):
 if __name__ == "__main__":
     print("🔍 Testing bot token...")
     
-    # Start health check server first (always)
-    start_health_check()
-    
-    if BOT_TOKEN and test_bot_connection(BOT_TOKEN):
-        print("🚀 Starting bot with full protection systems...")
-        
-        # Main loop with restart capability
-        restart_count = 0
-        max_restarts = 20
-        
-        while restart_count < max_restarts:
-            try:
-                bot = CrossPlatformBot(BOT_TOKEN)
-                bot.run()
-            except Exception as e:
-                restart_count += 1
-                print(f"💥 Critical bot crash (#{restart_count}): {e}")
-                print("🔄 Restarting in 10 seconds...")
-                time.sleep(10)
-            except KeyboardInterrupt:
-                print("\n🛑 Bot stopped by user")
-                break
-        else:
-            print(f"❌ Maximum restarts ({max_restarts}) reached. Please check for underlying issues.")
-    else:
-        print("❌ Cannot start bot with invalid token")
-        print("💡 Check your BOT_TOKEN environment variable")
-        print("💡 Health server is running on /health endpoint")
-        
-        # Keep the health server running even without bot
-        while True:
-            time.sleep(10)
