@@ -18,15 +18,17 @@ A cross-platform Telegram bot for game distribution with mini-games integration.
 2. Go to [Railway.app](https://railway.app/)
 3. Sign up with GitHub
 4. Create New Project → Deploy from GitHub
-5. Add environment variable: `BOT_TOKEN=your_bot_token_here`
-6. Deploy! 🎉
+5. Add environment variable:
+6. `ADMIN_IDS=your_telegram_id`
+7. `BOT_TOKEN=your_bot_token_here`
+8. Deploy! 🎉
 
 ### Render.com (Alternative)
 1. Go to [Render.com](https://render.com/)
 2. Create New Web Service
 3. Connect this repository
 4. Set start command: `python channel_bot.py`
-5. Add `BOT_TOKEN` environment variable
+5. Add `BOT_TOKEN` and `ADMIN_IDS` environment variable
 
 ## 🛠️ Admin Commands
 
@@ -47,6 +49,7 @@ A cross-platform Telegram bot for game distribution with mini-games integration.
 ## 🔧 Environment Variables
 
 - `BOT_TOKEN` - Your Telegram bot token
+- `ADMIN_IDS` - Your Telegram Account ID 
 
 ## 📞 Support
 
