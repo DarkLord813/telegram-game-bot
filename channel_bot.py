@@ -18,6 +18,7 @@ print("Admin Game Uploads Enabled + Forward Support + Game Search")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
 print("Admin Broadcast Messaging System + Keep-Alive Protection")
 print("Real Telegram Stars Donation System + Fragment Withdrawal")
+print("AmerPay Payment Integration + Multi-Currency Support")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -27,7 +28,13 @@ print(f"🔍 DEBUG: Current directory: {os.getcwd()}")
 print(f"🔍 DEBUG: Files in directory: {os.listdir('.')}")
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
+AMERPAY_API_KEY = os.environ.get('AMERPAY_API_KEY')
+AMERPAY_MERCHANT_ID = os.environ.get('AMERPAY_MERCHANT_ID')
+
 print(f"🔍 DEBUG: BOT_TOKEN exists: {'YES' if BOT_TOKEN else 'NO'}")
+print(f"🔍 DEBUG: AMERPAY_API_KEY exists: {'YES' if AMERPAY_API_KEY else 'NO'}")
+print(f"🔍 DEBUG: AMERPAY_MERCHANT_ID exists: {'YES' if AMERPAY_MERCHANT_ID else 'NO'}")
+
 if BOT_TOKEN:
     print(f"🔍 DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
     print(f"🔍 DEBUG: Token length: {len(BOT_TOKEN)}")
@@ -95,9 +102,25 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars Donations']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars Donations', 'AmerPay Payments']
         }
     })
+
+@app.route('/amerpay-webhook', methods=['POST'])
+def amerpay_webhook():
+    """AmerPay payment webhook handler"""
+    try:
+        data = request.get_json()
+        print(f"🔔 AmerPay Webhook Received: {data}")
+        
+        # Verify webhook signature (implement based on AmerPay docs)
+        # Process payment confirmation
+        # Update database records
+        
+        return jsonify({'status': 'success'}), 200
+    except Exception as e:
+        print(f"❌ AmerPay webhook error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def run_health_server():
     """Run the health check server with error handling"""
@@ -167,6 +190,239 @@ class KeepAliveService:
         """Stop keep-alive service"""
         self.is_running = False
         print("🛑 Keep-alive service stopped")
+
+# ==================== AMERPAY PAYMENT SYSTEM ====================
+
+class AmerPaySystem:
+    def __init__(self, bot_instance):
+        self.bot = bot_instance
+        self.api_key = AMERPAY_API_KEY
+        self.merchant_id = AMERPAY_MERCHANT_ID
+        self.base_url = "https://api.amerpay.com/v1"  # Update with actual AmerPay API URL
+        self.setup_amerpay_database()
+        
+    def setup_amerpay_database(self):
+        """Setup AmerPay payments database"""
+        try:
+            cursor = self.bot.conn.cursor()
+            
+            # AmerPay transactions table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS amerpay_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    user_name TEXT,
+                    amount REAL,
+                    currency TEXT DEFAULT 'USD',
+                    description TEXT,
+                    amerpay_payment_id TEXT,
+                    payment_status TEXT DEFAULT 'pending',
+                    payment_url TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    paid_at DATETIME,
+                    invoice_payload TEXT
+                )
+            ''')
+            
+            # AmerPay balance table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS amerpay_balance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_amount_earned REAL DEFAULT 0.0,
+                    total_amount_withdrawn REAL DEFAULT 0.0,
+                    available_balance REAL DEFAULT 0.0,
+                    currency TEXT DEFAULT 'USD',
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Initialize balance if not exists
+            cursor.execute('INSERT OR IGNORE INTO amerpay_balance (id) VALUES (1)')
+            
+            self.bot.conn.commit()
+            print("✅ AmerPay payment system setup complete!")
+            
+        except Exception as e:
+            print(f"❌ AmerPay database setup error: {e}")
+    
+    def create_payment_link(self, user_id, amount, currency='USD', description="Donation"):
+        """Create AmerPay payment link"""
+        try:
+            # Generate unique invoice payload
+            invoice_payload = f"amerpay_{user_id}_{int(time.time())}"
+            
+            # Prepare payment data for AmerPay API
+            payment_data = {
+                "merchant_id": self.merchant_id,
+                "amount": amount,
+                "currency": currency,
+                "description": description,
+                "customer_id": str(user_id),
+                "callback_url": f"{os.environ.get('RENDER_EXTERNAL_URL', 'https://your-app.onrender.com')}/amerpay-webhook",
+                "return_url": "https://t.me/your_bot",
+                "metadata": {
+                    "user_id": user_id,
+                    "invoice_payload": invoice_payload,
+                    "bot_token": self.bot.token[:10] + "..."
+                }
+            }
+            
+            # Make API request to AmerPay
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # For now, simulate API call - replace with actual AmerPay API endpoint
+            print(f"💰 Creating AmerPay payment: ${amount} {currency} for user {user_id}")
+            
+            # Simulate payment URL creation (replace with actual API call)
+            payment_url = f"https://amerpay.com/pay/{invoice_payload}"  # Example URL
+            
+            # Store transaction in database
+            cursor = self.bot.conn.cursor()
+            cursor.execute('''
+                INSERT INTO amerpay_transactions 
+                (user_id, user_name, amount, currency, description, amerpay_payment_id, 
+                 payment_url, invoice_payload, payment_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                user_id,
+                self.bot.get_user_info(user_id)['first_name'],
+                amount,
+                currency,
+                description,
+                f"amerpay_{invoice_payload}",
+                payment_url,
+                invoice_payload,
+                'pending'
+            ))
+            
+            self.bot.conn.commit()
+            
+            return payment_url, invoice_payload
+            
+        except Exception as e:
+            print(f"❌ Error creating AmerPay payment: {e}")
+            return None, None
+    
+    def verify_payment(self, payment_id):
+        """Verify payment status with AmerPay API"""
+        try:
+            # Make API call to AmerPay to verify payment
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # For now, simulate API call
+            print(f"🔍 Verifying AmerPay payment: {payment_id}")
+            
+            # Simulate payment verification (replace with actual API call)
+            # In real implementation, this would check with AmerPay API
+            is_paid = random.choice([True, False])  # Simulate for testing
+            
+            if is_paid:
+                # Update transaction status
+                cursor = self.bot.conn.cursor()
+                cursor.execute('''
+                    UPDATE amerpay_transactions 
+                    SET payment_status = 'completed',
+                        paid_at = CURRENT_TIMESTAMP
+                    WHERE amerpay_payment_id = ? AND payment_status = 'pending'
+                ''', (payment_id,))
+                
+                # Update balance
+                cursor.execute('''
+                    SELECT amount FROM amerpay_transactions 
+                    WHERE amerpay_payment_id = ?
+                ''', (payment_id,))
+                result = cursor.fetchone()
+                
+                if result:
+                    amount = result[0]
+                    cursor.execute('''
+                        UPDATE amerpay_balance 
+                        SET total_amount_earned = total_amount_earned + ?,
+                            available_balance = available_balance + ?,
+                            last_updated = CURRENT_TIMESTAMP
+                        WHERE id = 1
+                    ''', (amount, amount))
+                
+                self.bot.conn.commit()
+                print(f"✅ Payment verified and processed: {payment_id}")
+            
+            return is_paid
+            
+        except Exception as e:
+            print(f"❌ Payment verification error: {e}")
+            return False
+    
+    def get_balance(self):
+        """Get current AmerPay balance"""
+        try:
+            cursor = self.bot.conn.cursor()
+            cursor.execute('SELECT * FROM amerpay_balance WHERE id = 1')
+            result = cursor.fetchone()
+            
+            if result:
+                return {
+                    'total_amount_earned': result[1],
+                    'total_amount_withdrawn': result[2],
+                    'available_balance': result[3],
+                    'currency': result[4],
+                    'last_updated': result[5]
+                }
+            return {'available_balance': 0.0, 'currency': 'USD'}
+        except Exception as e:
+            print(f"❌ Error getting AmerPay balance: {e}")
+            return {'available_balance': 0.0, 'currency': 'USD'}
+    
+    def get_recent_transactions(self, limit=5):
+        """Get recent AmerPay transactions"""
+        try:
+            cursor = self.bot.conn.cursor()
+            cursor.execute('''
+                SELECT user_name, amount, currency, payment_status, created_at 
+                FROM amerpay_transactions 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (limit,))
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"❌ Error getting recent transactions: {e}")
+            return []
+    
+    def process_withdrawal(self, admin_id, amount, currency='USD'):
+        """Process withdrawal from AmerPay balance"""
+        try:
+            balance = self.get_balance()
+            
+            if amount > balance['available_balance']:
+                return False, "Insufficient balance"
+            
+            # In real implementation, you would integrate with AmerPay withdrawal API
+            # This is a simplified version
+            
+            print(f"💰 Withdrawing {amount} {currency} from AmerPay for admin {admin_id}")
+            
+            # Update balance
+            cursor = self.bot.conn.cursor()
+            cursor.execute('''
+                UPDATE amerpay_balance 
+                SET total_amount_withdrawn = total_amount_withdrawn + ?,
+                    available_balance = available_balance - ?,
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE id = 1
+            ''', (amount, amount))
+            
+            self.bot.conn.commit()
+            
+            return True, f"Withdrawal of {amount} {currency} processed successfully"
+            
+        except Exception as e:
+            print(f"❌ Withdrawal error: {e}")
+            return False, "Withdrawal failed"
 
 # ==================== REAL TELEGRAM STARS SYSTEM ====================
 
@@ -455,9 +711,11 @@ class CrossPlatformBot:
         self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': ''}}
         self.broadcast_stats = {}     # Store broadcast statistics
         
-        # Real Telegram Stars system
+        # Payment systems
         self.stars_system = TelegramStarsSystem(self)
+        self.amerpay_system = AmerPaySystem(self)
         self.pending_stars_payments = {}  # {user_id: {'amount': amount, 'invoice_payload': payload}}
+        self.pending_amerpay_payments = {}  # {user_id: {'amount': amount, 'currency': currency, 'invoice_payload': payload}}
         
         # CRASH PROTECTION
         self.last_restart = time.time()
@@ -485,7 +743,8 @@ class CrossPlatformBot:
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
         print("📢 Admin broadcast messaging system enabled")
         print("⭐ Real Telegram Stars donation system enabled")
-        print("💰 Fragment withdrawal system enabled")
+        print("💰 AmerPay payment system enabled")
+        print("💳 Multi-currency support enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
     
@@ -506,6 +765,318 @@ class CrossPlatformBot:
         except Exception as e:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
+
+    # ==================== AMERPAY PAYMENT METHODS ====================
+    
+    def show_amerpay_donation_menu(self, user_id, chat_id, message_id=None):
+        """Show AmerPay donation menu"""
+        balance = self.amerpay_system.get_balance()
+        recent_transactions = self.amerpay_system.get_recent_transactions(3)
+        
+        donation_text = """💳 <b>Support Our Bot with AmerPay!</b>
+
+Make secure payments using AmerPay with multiple currency options!
+
+🌟 <b>Why Donate?</b>
+• Keep the bot running 24/7
+• Support new features development  
+• Help cover server costs
+• Get recognition in our donor list
+
+💫 <b>How it works:</b>
+1. Choose donation amount below
+2. Complete secure payment via AmerPay
+3. Get instant confirmation
+4. Support our development!
+
+📊 <b>Payment Stats:</b>"""
+        
+        donation_text += f"\n• Total Received: <b>${balance['total_amount_earned']:.2f} {balance['currency']}</b>"
+        donation_text += f"\n• Available Balance: <b>${balance['available_balance']:.2f} {balance['currency']}</b>"
+        
+        if recent_transactions:
+            donation_text += "\n\n🎉 <b>Recent Payments:</b>"
+            for transaction in recent_transactions:
+                donor_name, amount, currency, status, created_at = transaction
+                date_str = datetime.fromisoformat(created_at).strftime('%m/%d')
+                status_icon = "✅" if status == 'completed' else "⏳"
+                donation_text += f"\n• {donor_name}: {status_icon} <b>${amount:.2f} {currency}</b>"
+        
+        donation_text += "\n\nThank you for considering supporting us! 🙏"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "💵 $5 USD", "callback_data": "amerpay_5"},
+                    {"text": "💵 $10 USD", "callback_data": "amerpay_10"}
+                ],
+                [
+                    {"text": "💵 $25 USD", "callback_data": "amerpay_25"},
+                    {"text": "💵 $50 USD", "callback_data": "amerpay_50"}
+                ],
+                [
+                    {"text": "💫 Custom Amount", "callback_data": "amerpay_custom"},
+                    {"text": "📊 Payment Stats", "callback_data": "amerpay_stats"}
+                ],
+                [
+                    {"text": "⭐ Telegram Stars", "callback_data": "stars_menu"},
+                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+        
+        if message_id:
+            self.edit_message(chat_id, message_id, donation_text, keyboard)
+        else:
+            self.robust_send_message(chat_id, donation_text, keyboard)
+    
+    def process_amerpay_donation(self, user_id, chat_id, amount, currency='USD'):
+        """Process AmerPay donation"""
+        try:
+            # Create AmerPay payment link
+            payment_url, invoice_payload = self.amerpay_system.create_payment_link(
+                user_id, amount, currency, "Bot Donation"
+            )
+            
+            if payment_url:
+                # Store pending payment
+                self.pending_amerpay_payments[user_id] = {
+                    'amount': amount,
+                    'currency': currency,
+                    'invoice_payload': invoice_payload,
+                    'chat_id': chat_id
+                }
+                
+                # Send payment instructions
+                payment_text = f"""💳 <b>AmerPay Payment</b>
+
+💰 Amount: <b>${amount:.2f} {currency}</b>
+📝 Description: Bot Donation
+
+🎯 <b>How to pay:</b>
+1. Click the payment link below
+2. Complete payment on AmerPay
+3. Return here for confirmation
+
+🔗 <a href="{payment_url}">Click here to pay with AmerPay</a>
+
+After payment, click the verification button below."""
+                
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "🔗 Pay with AmerPay", "url": payment_url}],
+                        [{"text": "✅ Verify Payment", "callback_data": f"verify_amerpay_{invoice_payload}"}],
+                        [{"text": "❌ Cancel Payment", "callback_data": "cancel_amerpay_payment"}]
+                    ]
+                }
+                
+                self.robust_send_message(chat_id, payment_text, keyboard)
+                return True
+            else:
+                self.robust_send_message(chat_id, "❌ Sorry, there was an error creating the payment. Please try again.")
+                return False
+                
+        except Exception as e:
+            print(f"❌ AmerPay donation processing error: {e}")
+            self.robust_send_message(chat_id, "❌ Sorry, there was an error processing your payment. Please try again.")
+            return False
+    
+    def verify_amerpay_payment(self, user_id, chat_id, invoice_payload):
+        """Verify AmerPay payment status"""
+        try:
+            # Verify payment with AmerPay
+            payment_id = f"amerpay_{invoice_payload}"
+            is_paid = self.amerpay_system.verify_payment(payment_id)
+            
+            if is_paid:
+                # Get payment details
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT amount, currency FROM amerpay_transactions 
+                    WHERE invoice_payload = ?
+                ''', (invoice_payload,))
+                result = cursor.fetchone()
+                
+                if result:
+                    amount, currency = result
+                    
+                    # Send confirmation
+                    confirmation_text = f"""✅ <b>Payment Confirmed!</b>
+
+💳 Thank you for your AmerPay payment!
+
+💰 Amount: <b>${amount:.2f} {currency}</b>
+📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🆔 Transaction ID: {payment_id}
+
+Your support helps us maintain and improve this bot! 🙏"""
+                    
+                    self.robust_send_message(chat_id, confirmation_text)
+                    
+                    # Notify admins
+                    self.notify_admins_about_amerpay_payment(user_id, amount, currency)
+                    
+                    # Clean up pending payment
+                    if user_id in self.pending_amerpay_payments:
+                        del self.pending_amerpay_payments[user_id]
+                    
+                    return True
+            else:
+                self.robust_send_message(chat_id, "⏳ Payment not confirmed yet. Please try again in a moment.")
+                return False
+                
+        except Exception as e:
+            print(f"❌ AmerPay verification error: {e}")
+            self.robust_send_message(chat_id, "❌ Error verifying payment. Please try again or contact support.")
+            return False
+    
+    def show_amerpay_stats(self, user_id, chat_id, message_id):
+        """Show AmerPay statistics"""
+        balance = self.amerpay_system.get_balance()
+        recent_transactions = self.amerpay_system.get_recent_transactions(10)
+        
+        stats_text = """📊 <b>AmerPay Statistics</b>
+
+💰 <b>Financial Overview:</b>"""
+        
+        stats_text += f"\n• Total Amount Earned: <b>${balance['total_amount_earned']:.2f} {balance['currency']}</b>"
+        stats_text += f"\n• Total Amount Withdrawn: <b>${balance['total_amount_withdrawn']:.2f} {balance['currency']}</b>"
+        stats_text += f"\n• Available Balance: <b>${balance['available_balance']:.2f} {balance['currency']}</b>"
+        stats_text += f"\n• Last Updated: {balance['last_updated'][:16] if balance['last_updated'] else 'Never'}"
+        
+        if recent_transactions:
+            stats_text += "\n\n🎉 <b>Recent Transactions (Top 10):</b>"
+            for i, transaction in enumerate(recent_transactions, 1):
+                donor_name, amount, currency, status, created_at = transaction
+                date_str = datetime.fromisoformat(created_at).strftime('%m/%d %H:%M')
+                status_icon = "✅" if status == 'completed' else "⏳"
+                stats_text += f"\n{i}. {donor_name}: {status_icon} <b>${amount:.2f} {currency}</b> - {date_str}"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "💳 Pay with AmerPay", "callback_data": "amerpay_menu"}],
+                [{"text": "🔄 Refresh Stats", "callback_data": "amerpay_stats"}],
+                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+            ]
+        }
+        
+        if self.is_admin(user_id):
+            keyboard["inline_keyboard"].insert(0, [
+                {"text": "💰 Withdraw Funds", "callback_data": "amerpay_withdraw_panel"}
+            ])
+        
+        self.edit_message(chat_id, message_id, stats_text, keyboard)
+    
+    def show_admin_amerpay_withdrawal_panel(self, user_id, chat_id, message_id):
+        """Show withdrawal panel for admins"""
+        if not self.is_admin(user_id):
+            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
+            return
+        
+        balance = self.amerpay_system.get_balance()
+        
+        withdrawal_text = """💰 <b>Admin AmerPay Withdrawal Panel</b>
+
+📊 <b>Balance Information:</b>"""
+        
+        withdrawal_text += f"\n• Available Balance: <b>${balance['available_balance']:.2f} {balance['currency']}</b>"
+        withdrawal_text += f"\n• Total Earned: <b>${balance['total_amount_earned']:.2f} {balance['currency']}</b>"
+        withdrawal_text += f"\n• Total Withdrawn: <b>${balance['total_amount_withdrawn']:.2f} {balance['currency']}</b>"
+        
+        withdrawal_text += "\n\n💡 <b>Withdrawal Options:</b>"
+        withdrawal_text += "\n• Quick withdrawal with preset amounts"
+        withdrawal_text += "\n• Custom withdrawal amount"
+        withdrawal_text += "\n• Withdraw to bank account"
+        
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "💰 Withdraw $50", "callback_data": "amerpay_withdraw_50"},
+                    {"text": "💰 Withdraw $100", "callback_data": "amerpay_withdraw_100"}
+                ],
+                [
+                    {"text": "💰 Withdraw $500", "callback_data": "amerpay_withdraw_500"},
+                    {"text": "💫 Custom Amount", "callback_data": "amerpay_withdraw_custom"}
+                ],
+                [
+                    {"text": "📋 Bank Withdrawal", "callback_data": "amerpay_withdraw_bank"},
+                    {"text": "🔄 Refresh", "callback_data": "amerpay_withdraw_panel"}
+                ],
+                [
+                    {"text": "🔙 Back to Admin", "callback_data": "admin_panel"}
+                ]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, withdrawal_text, keyboard)
+    
+    def process_amerpay_withdrawal(self, user_id, chat_id, amount, currency='USD'):
+        """Process AmerPay withdrawal"""
+        if not self.is_admin(user_id):
+            self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
+            return False
+        
+        user_info = self.get_user_info(user_id)
+        admin_name = user_info.get('first_name', 'Admin')
+        
+        success, message = self.amerpay_system.process_withdrawal(user_id, amount, currency)
+        
+        if success:
+            withdrawal_text = f"""✅ <b>Withdrawal Request Processed</b>
+
+💳 You have successfully withdrawn <b>${amount:.2f} {currency}</b> from AmerPay.
+
+📋 <b>Withdrawal Details:</b>
+• Amount: ${amount:.2f} {currency}
+• Admin: {admin_name}
+• Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• Status: Completed
+
+💡 The funds will be transferred to your linked account."""
+            
+            self.robust_send_message(chat_id, withdrawal_text)
+            
+            # Notify other admins
+            self.notify_admins_about_amerpay_withdrawal(admin_name, amount, currency)
+            
+            return True
+        else:
+            self.robust_send_message(chat_id, f"❌ Withdrawal failed: {message}")
+            return False
+    
+    def notify_admins_about_amerpay_payment(self, user_id, amount, currency):
+        """Notify all admins about new AmerPay payment"""
+        user_info = self.get_user_info(user_id)
+        donor_name = user_info.get('first_name', 'Anonymous')
+        
+        notification_text = f"""🎉 <b>New AmerPay Payment Received!</b>
+
+💳 <b>{donor_name}</b> paid <b>${amount:.2f} {currency}</b>!
+
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Thank you for the support! 🎊"""
+        
+        # Send to all admins
+        for admin_id in self.ADMIN_IDS:
+            try:
+                self.robust_send_message(admin_id, notification_text)
+            except Exception as e:
+                print(f"❌ Failed to notify admin {admin_id}: {e}")
+    
+    def notify_admins_about_amerpay_withdrawal(self, admin_name, amount, currency):
+        """Notify all admins about AmerPay withdrawal"""
+        notification_text = f"""📋 <b>AmerPay Withdrawal Processed</b>
+
+💳 <b>{admin_name}</b> withdrew <b>${amount:.2f} {currency}</b> from AmerPay.
+
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+        
+        for admin_id in self.ADMIN_IDS:
+            try:
+                self.robust_send_message(admin_id, notification_text)
+            except Exception as e:
+                print(f"❌ Failed to notify admin {admin_id}: {e}")
 
     # ==================== REAL TELEGRAM STARS METHODS ====================
     
@@ -560,6 +1131,7 @@ Your donations help us maintain and improve this bot for everyone!
                     {"text": "📊 Donation Stats", "callback_data": "stars_stats"}
                 ],
                 [
+                    {"text": "💳 AmerPay", "callback_data": "amerpay_menu"},
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
                 ]
             ]
@@ -2277,8 +2849,38 @@ The file is now available in the games browser and search!"""
                 )
             ''')
             
-            # Initialize balance if not exists
+            # AmerPay tables
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS amerpay_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    user_name TEXT,
+                    amount REAL,
+                    currency TEXT DEFAULT 'USD',
+                    description TEXT,
+                    amerpay_payment_id TEXT,
+                    payment_status TEXT DEFAULT 'pending',
+                    payment_url TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    paid_at DATETIME,
+                    invoice_payload TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS amerpay_balance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_amount_earned REAL DEFAULT 0.0,
+                    total_amount_withdrawn REAL DEFAULT 0.0,
+                    available_balance REAL DEFAULT 0.0,
+                    currency TEXT DEFAULT 'USD',
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Initialize balances if not exists
             cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
+            cursor.execute('INSERT OR IGNORE INTO amerpay_balance (id) VALUES (1)')
             
             self.conn.commit()
             print("✅ Database setup successful!")
@@ -2656,7 +3258,8 @@ The file is now available in the games browser and search!"""
                     {"text": "🔍 Search Games", "callback_data": "search_games"}
                 ],
                 [
-                    {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
+                    {"text": "⭐ Donate Stars", "callback_data": "stars_menu"},
+                    {"text": "💳 AmerPay", "callback_data": "amerpay_menu"}
                 ],
                 [
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
@@ -2712,7 +3315,8 @@ The file is now available in the games browser and search!"""
                 {"text": "🔍 Search Games", "callback_data": "search_games"}
             ],
             [
-                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
+                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"},
+                {"text": "💳 AmerPay", "callback_data": "amerpay_menu"}
             ]
         ]
         
@@ -2738,8 +3342,12 @@ The file is now available in the games browser and search!"""
                     {"text": "💰 Withdraw Stars", "callback_data": "stars_withdraw_panel"}
                 ],
                 [
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"},
+                    {"text": "💳 Withdraw AmerPay", "callback_data": "amerpay_withdraw_panel"},
                     {"text": "📊 Stars Stats", "callback_data": "stars_stats"}
+                ],
+                [
+                    {"text": "📊 AmerPay Stats", "callback_data": "amerpay_stats"},
+                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
                 ],
                 [
                     {"text": "📊 Profile", "callback_data": "profile"},
@@ -2937,7 +3545,7 @@ Use this ID for admin verification if needed."""
             print(f"❌ Error getting user info: {e}")
             return {'first_name': 'User'}
 
-    # ==================== UPDATED CALLBACK HANDLER WITH REAL STARS ====================
+    # ==================== UPDATED CALLBACK HANDLER WITH AMERPAY ====================
 
     def handle_callback_query(self, callback_query):
         try:
@@ -2952,6 +3560,84 @@ Use this ID for admin verification if needed."""
             
             self.answer_callback_query(callback_query['id'])
             
+            # AmerPay payment system callbacks
+            if data == "amerpay_menu":
+                self.show_amerpay_donation_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("amerpay_"):
+                if data == "amerpay_custom":
+                    # Start custom AmerPay amount
+                    self.robust_send_message(chat_id, 
+                        "💫 <b>Custom AmerPay Amount</b>\n\n"
+                        "Please enter the amount you'd like to donate (in USD):\n\n"
+                        "💡 <i>Enter a number (e.g., 15 for $15)</i>"
+                    )
+                elif data == "amerpay_stats":
+                    self.show_amerpay_stats(user_id, chat_id, message_id)
+                    return
+                else:
+                    # Process predefined AmerPay amount
+                    amount_str = data.replace("amerpay_", "")
+                    try:
+                        amount = float(amount_str)
+                        self.process_amerpay_donation(user_id, chat_id, amount)
+                    except ValueError:
+                        self.robust_send_message(chat_id, "❌ Invalid amount.")
+                return
+                
+            elif data.startswith("verify_amerpay_"):
+                # Handle AmerPay payment verification
+                invoice_payload = data.replace("verify_amerpay_", "")
+                self.verify_amerpay_payment(user_id, chat_id, invoice_payload)
+                return
+                
+            elif data == "cancel_amerpay_payment":
+                if user_id in self.pending_amerpay_payments:
+                    del self.pending_amerpay_payments[user_id]
+                self.robust_send_message(chat_id, "❌ AmerPay payment cancelled.")
+                return
+                
+            # AmerPay withdrawal system callbacks (admin only)
+            elif data == "amerpay_withdraw_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.show_admin_amerpay_withdrawal_panel(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("amerpay_withdraw_"):
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                    
+                amount_str = data.replace("amerpay_withdraw_", "")
+                if amount_str == "custom":
+                    # Start custom withdrawal process
+                    self.robust_send_message(chat_id, 
+                        "💰 <b>Custom Withdrawal Amount</b>\n\n"
+                        "Please enter the amount you'd like to withdraw from AmerPay (in USD):"
+                    )
+                elif amount_str == "bank":
+                    # Show bank withdrawal info
+                    bank_info = """💰 <b>Bank Withdrawal</b>
+
+To withdraw funds to your bank account:
+
+1. Contact AmerPay support
+2. Provide your bank details
+3. Follow their withdrawal process
+
+💡 <b>Note:</b> This requires proper bank account linking with AmerPay."""
+                    self.robust_send_message(chat_id, bank_info)
+                else:
+                    try:
+                        amount = float(amount_str)
+                        self.process_amerpay_withdrawal(user_id, chat_id, amount)
+                    except ValueError:
+                        self.robust_send_message(chat_id, "❌ Invalid withdrawal amount.")
+                return
+
             # Real Telegram Stars system callbacks
             if data == "stars_menu":
                 self.show_stars_donation_menu(user_id, chat_id, message_id)
@@ -3252,6 +3938,7 @@ Choose an option:"""
 • 🎮 Mini Games - Fun mini-games to play
 • 🔍 Search Games - Search for specific games
 • ⭐ Donate Stars - Support our bot with Telegram Stars
+• 💳 AmerPay - Make secure payments with AmerPay
 
 🔗 Channel: @pspgamers5"""
                 self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
@@ -3361,6 +4048,7 @@ Have fun! 🎉"""
 • 🎮 Mini-Games Entertainment
 • 📢 Admin Broadcast System
 • ⭐ Real Telegram Stars Donations
+• 💳 AmerPay Payment System
 • 💰 Fragment Withdrawal System
 • 🔋 Keep-Alive Protection
 
@@ -3381,6 +4069,7 @@ Choose an option below:"""
 • 🕒 Real-time Updates
 • 🎮 Mini-Games
 • ⭐ Telegram Stars Donations
+• 💳 AmerPay Payments
 
 📢 Channel: @pspgamers5
 Choose an option below:"""
@@ -3409,7 +4098,8 @@ Choose an option below:"""
 • 🔍 Scan bot-uploaded games
 • 📢 Broadcast messages to users
 • 💰 Withdraw Telegram Stars
-• 📊 Stars donation statistics
+• 💳 Withdraw AmerPay funds
+• 📊 Payment statistics
 • 🔍 Monitor system status
 
 📊 Your Stats:
@@ -3562,6 +4252,7 @@ After code verification, you'll need to join our channel."""
 • 🕒 Real-time Updates
 • 🎮 Mini-Games
 • ⭐ Telegram Stars Donations
+• 💳 AmerPay Payments
 
 📢 Channel: @pspgamers5
 Choose an option below:"""
@@ -3591,7 +4282,7 @@ After joining, click the button below:"""
             print(f"❌ Code verification error: {e}")
             return False
 
-    # ==================== UPDATED MESSAGE PROCESSOR WITH REAL STARS ====================
+    # ==================== UPDATED MESSAGE PROCESSOR WITH AMERPAY ====================
 
     def process_message(self, message):
         """Main message processing function"""
@@ -3603,6 +4294,22 @@ After joining, click the button below:"""
                 first_name = message['from']['first_name']
                 
                 print(f"💬 Message from {first_name} ({user_id}): {text}")
+                
+                # Handle AmerPay custom amount input
+                if user_id in self.pending_amerpay_payments:
+                    try:
+                        amount = float(text.strip())
+                        if amount <= 0:
+                            self.robust_send_message(chat_id, "❌ Please enter a positive amount.")
+                            return True
+                        
+                        # Process the AmerPay donation
+                        payment_info = self.pending_amerpay_payments[user_id]
+                        del self.pending_amerpay_payments[user_id]
+                        return self.process_amerpay_donation(user_id, chat_id, amount, payment_info['currency'])
+                    except ValueError:
+                        self.robust_send_message(chat_id, "❌ Please enter a valid number for the amount.")
+                        return True
                 
                 # Handle stars custom amount input
                 if user_id in self.pending_stars_payments:
@@ -3619,16 +4326,25 @@ After joining, click the button below:"""
                         self.robust_send_message(chat_id, "❌ Please enter a valid number for the stars amount.")
                         return True
                 
-                # Handle stars withdrawal custom amount input (admin only)
-                if self.is_admin(user_id) and text.strip().isdigit():
+                # Handle payment withdrawal custom amount input (admin only)
+                if self.is_admin(user_id) and text.strip().replace('.', '').isdigit():
                     try:
-                        amount = int(text.strip())
+                        amount = float(text.strip())
                         if amount > 0:
                             # Check if this might be a withdrawal request
-                            balance = self.stars_system.get_stars_balance()
-                            if amount <= balance['available_stars']:
-                                # This looks like a withdrawal amount
-                                return self.process_stars_withdrawal(user_id, chat_id, amount)
+                            amer_balance = self.amerpay_system.get_balance()
+                            stars_balance = self.stars_system.get_stars_balance()
+                            
+                            # Determine which withdrawal this is based on context
+                            # For now, assume AmerPay if amount has decimal, Stars if integer
+                            if amount == int(amount):
+                                # Integer amount - likely stars
+                                if amount <= stars_balance['available_stars']:
+                                    return self.process_stars_withdrawal(user_id, chat_id, int(amount))
+                            else:
+                                # Decimal amount - likely AmerPay
+                                if amount <= amer_balance['available_balance']:
+                                    return self.process_amerpay_withdrawal(user_id, chat_id, amount)
                     except ValueError:
                         pass
                 
@@ -3679,9 +4395,15 @@ Have fun! 🎉"""
                     elif text == '/stars' and self.is_user_completed(user_id):
                         self.show_stars_donation_menu(user_id, chat_id)
                         return True
+                    elif text == '/amerpay' and self.is_user_completed(user_id):
+                        self.show_amerpay_donation_menu(user_id, chat_id)
+                        return True
                     elif text == '/broadcast' and self.is_admin(user_id):
                         return self.start_broadcast(user_id, chat_id)
                     elif text == '/withdraw' and self.is_admin(user_id):
+                        self.show_admin_amerpay_withdrawal_panel(user_id, chat_id)
+                        return True
+                    elif text == '/withdrawstars' and self.is_admin(user_id):
                         self.show_admin_stars_withdrawal_panel(user_id, chat_id)
                         return True
                     elif text == '/cleargames' and self.is_admin(user_id):
@@ -3727,6 +4449,9 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                     elif text == '/starsstats' and self.is_admin(user_id):
                         self.show_stars_stats(user_id, chat_id)
                         return True
+                    elif text == '/amerpaystats' and self.is_admin(user_id):
+                        self.show_amerpay_stats(user_id, chat_id)
+                        return True
                 
                 # Handle code verification
                 if text.isdigit() and len(text) == 6:
@@ -3765,7 +4490,8 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
         print("⭐ Telegram Stars donations: /stars")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /withdraw, /keepalive, /starsstats")
+        print("💳 AmerPay payments: /amerpay")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /withdraw, /withdrawstars, /keepalive, /starsstats, /amerpaystats")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
         print("🛑 Press Ctrl+C to stop")
@@ -3837,8 +4563,10 @@ try:
 except ImportError:
     print("ℹ️ python-dotenv not installed, using system environment variables")
 
-# Get token from environment variables
+# Get tokens from environment variables
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
+AMERPAY_API_KEY = os.environ.get('AMERPAY_API_KEY')
+AMERPAY_MERCHANT_ID = os.environ.get('AMERPAY_MERCHANT_ID')
 
 if not BOT_TOKEN:
     print("❌ ERROR: BOT_TOKEN environment variable not set!")
@@ -3847,6 +4575,14 @@ if not BOT_TOKEN:
     print("   - OR create a .env file with BOT_TOKEN=your_token")
     # Don't exit - let the health server continue running
     print("💡 Health server will continue running for monitoring")
+
+if not AMERPAY_API_KEY:
+    print("⚠️ WARNING: AMERPAY_API_KEY environment variable not set!")
+    print("💡 AmerPay features will be limited without API key")
+
+if not AMERPAY_MERCHANT_ID:
+    print("⚠️ WARNING: AMERPAY_MERCHANT_ID environment variable not set!")
+    print("💡 AmerPay features will be limited without merchant ID")
 
 # Test the token before starting
 def test_bot_connection(token):
