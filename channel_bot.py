@@ -1,5 +1,3 @@
-[file name]: channel_bot.py
-[file content begin]
 import requests
 import time
 import secrets
@@ -3904,4 +3902,3 @@ if __name__ == "__main__":
         # Keep the health server running even without bot
         while True:
             time.sleep(10)
-[file content end]
