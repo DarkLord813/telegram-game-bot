@@ -1,5 +1,3 @@
-[file name]: channel_bot.py
-[file content begin]
 import requests
 import time
 import secrets
