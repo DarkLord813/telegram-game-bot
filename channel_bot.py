@@ -224,8 +224,8 @@ class TelegramPaymentSystem:
             # Generate unique invoice payload
             invoice_payload = f"payment_{user_id}_{int(time.time())}"
             
-            # Prepare invoice data
-            prices = [{"label": description, "amount": int(amount * 100)}]  # Amount in cents
+            # Prepare invoice data - amount in cents
+            prices = [{"label": description, "amount": int(amount * 100)}]
             
             invoice_data = {
                 "chat_id": chat_id,
@@ -242,6 +242,8 @@ class TelegramPaymentSystem:
                 "need_shipping_address": False,
                 "is_flexible": False
             }
+            
+            print(f"💰 Creating invoice for {amount} {currency}")
             
             # Send invoice via Telegram API
             url = self.bot.base_url + "sendInvoice"
@@ -269,11 +271,13 @@ class TelegramPaymentSystem:
                 print(f"✅ Invoice created for user {user_id}: ${amount} {currency}")
                 return True
             else:
-                print(f"❌ Error creating invoice: {result.get('description')}")
+                error_msg = result.get('description', 'Unknown error')
+                print(f"❌ Error creating invoice: {error_msg}")
                 return False
             
         except Exception as e:
             print(f"❌ Error creating payment invoice: {e}")
+            traceback.print_exc()
             return False
     
     def get_balance(self):
@@ -285,10 +289,10 @@ class TelegramPaymentSystem:
             
             if result:
                 return {
-                    'total_amount_earned': result[1],
-                    'total_amount_withdrawn': result[2],
-                    'available_balance': result[3],
-                    'currency': result[4],
+                    'total_amount_earned': result[1] or 0.0,
+                    'total_amount_withdrawn': result[2] or 0.0,
+                    'available_balance': result[3] or 0.0,
+                    'currency': result[4] or 'USD',
                     'last_updated': result[5]
                 }
             return {'available_balance': 0.0, 'currency': 'USD'}
@@ -581,20 +585,21 @@ Make secure payments using Telegram's payment system!
     def process_payment_donation(self, user_id, chat_id, amount, currency='USD'):
         """Process payment donation"""
         try:
+            print(f"💰 Processing payment: {amount} {currency} for user {user_id}")
+            
             success = self.payment_system.create_invoice(
                 user_id, chat_id, amount, currency, "Bot Donation"
             )
             
             if success:
-                # Store payment session
-                self.payment_sessions[user_id] = {
-                    'amount': amount,
-                    'currency': currency,
-                    'chat_id': chat_id
-                }
                 return True
             else:
-                self.robust_send_message(chat_id, "❌ Sorry, there was an error creating the payment. Please try again.")
+                error_msg = "❌ Sorry, there was an error creating the payment. "
+                if not PAYMENT_PROVIDER_TOKEN:
+                    error_msg += "Payment provider token is not configured."
+                else:
+                    error_msg += "Please try again."
+                self.robust_send_message(chat_id, error_msg)
                 return False
                 
         except Exception as e:
@@ -3068,6 +3073,7 @@ Use this ID for admin verification if needed."""
             elif data.startswith("payment_"):
                 if data == "payment_custom":
                     # Start custom payment amount
+                    self.payment_sessions[user_id] = {'currency': 'USD'}
                     self.robust_send_message(chat_id, 
                         "💫 <b>Custom Payment Amount</b>\n\n"
                         "Please enter the amount you'd like to donate (in USD):\n\n"
@@ -3668,7 +3674,7 @@ After joining, click the button below:"""
                 
                 print(f"💬 Message from {first_name} ({user_id}): {text}")
                 
-                # Handle game request process
+                # Handle game request process FIRST (highest priority)
                 if user_id in self.request_sessions:
                     session = self.request_sessions[user_id]
                     
@@ -3680,7 +3686,7 @@ After joining, click the button below:"""
                         # User provided platform, complete the request
                         return self.complete_game_request(user_id, chat_id, text)
                 
-                # Handle payment custom amount input
+                # Handle payment custom amount input SECOND
                 if user_id in self.payment_sessions:
                     try:
                         amount = float(text.strip())
@@ -3690,8 +3696,9 @@ After joining, click the button below:"""
                         
                         # Process the payment
                         payment_info = self.payment_sessions[user_id]
+                        currency = payment_info.get('currency', 'USD')
                         del self.payment_sessions[user_id]
-                        return self.process_payment_donation(user_id, chat_id, amount, payment_info['currency'])
+                        return self.process_payment_donation(user_id, chat_id, amount, currency)
                     except ValueError:
                         self.robust_send_message(chat_id, "❌ Please enter a valid number for the amount.")
                         return True
@@ -3700,7 +3707,7 @@ After joining, click the button below:"""
                 if user_id in self.broadcast_sessions:
                     return self.handle_broadcast_message(user_id, chat_id, text)
                 
-                # Handle mini-games input first
+                # Handle mini-games input
                 if user_id in self.guess_games:
                     # Check if it's a number guess for an active game
                     if text.strip().isdigit():
@@ -3795,7 +3802,7 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                 if text.isdigit() and len(text) == 6:
                     return self.handle_code_verification(message)
                 
-                # Handle game search
+                # Handle game search LAST (lowest priority)
                 if self.is_user_verified(user_id):
                     return self.handle_game_search(message)
             
