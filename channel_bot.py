@@ -39,6 +39,24 @@ if BOT_TOKEN:
 else:
     print("❌ DEBUG: BOT_TOKEN is MISSING! Check Render Environment Variables")
 
+# ==================== ENVIRONMENT VARIABLES DEBUG ====================
+print(f"🔍 DEBUG: BOT_TOKEN loaded: {'YES' if BOT_TOKEN else 'NO'}")
+print(f"🔍 DEBUG: PAYMENT_PROVIDER_TOKEN loaded: {'YES' if PAYMENT_PROVIDER_TOKEN else 'NO'}")
+
+if PAYMENT_PROVIDER_TOKEN:
+    print(f"🔍 DEBUG: Payment token starts with: {PAYMENT_PROVIDER_TOKEN[:10]}...")
+    print(f"🔍 DEBUG: Payment token length: {len(PAYMENT_PROVIDER_TOKEN)}")
+else:
+    print("❌ DEBUG: PAYMENT_PROVIDER_TOKEN is MISSING!")
+    
+# List all available environment variables (for debugging)
+print("🔍 DEBUG: Available environment variables:")
+for key in os.environ:
+    if 'TOKEN' in key or 'BOT' in key or 'PAYMENT' in key:
+        value = os.environ[key]
+        masked_value = '*' * len(value) if value else 'EMPTY'
+        print(f"   {key}: {masked_value} (length: {len(value)})")
+
 # Test critical imports
 try:
     import requests
@@ -172,7 +190,13 @@ class TelegramPaymentSystem:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.provider_token = PAYMENT_PROVIDER_TOKEN
-        self.setup_payment_database()
+        self.is_configured = bool(self.provider_token)
+        
+        if not self.is_configured:
+            print("⚠️ PAYMENT_PROVIDER_TOKEN not configured - payment features will be limited")
+        else:
+            print(f"✅ Payment system configured with provider token (length: {len(self.provider_token)})")
+            self.setup_payment_database()
         
     def setup_payment_database(self):
         """Setup payments database"""
@@ -220,6 +244,19 @@ class TelegramPaymentSystem:
     
     def create_invoice(self, user_id, chat_id, amount, currency='USD', description="Donation"):
         """Create Telegram payment invoice"""
+        # Check if payment system is configured
+        if not self.is_configured:
+            error_msg = """❌ Payment system is not configured.
+
+💡 To enable payments, please configure:
+1. PAYMENT_PROVIDER_TOKEN environment variable
+2. Set up with a payment provider (Stripe, etc.)
+3. Contact bot administrator
+
+For now, you can support us by joining our channel and sharing the bot!"""
+            self.bot.robust_send_message(chat_id, error_msg)
+            return False
+            
         try:
             # Generate unique invoice payload
             invoice_payload = f"payment_{user_id}_{int(time.time())}"
@@ -496,7 +533,7 @@ class CrossPlatformBot:
         print("🔍 Game search feature enabled")
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
         print("📢 Admin broadcast messaging system enabled")
-        print("💳 Telegram payment system enabled")
+        print(f"💳 Telegram payment system: {'ENABLED' if self.payment_system.is_configured else 'DISABLED'}")
         print("🎮 Game request system enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
@@ -522,7 +559,43 @@ class CrossPlatformBot:
     # ==================== PAYMENT METHODS ====================
     
     def show_payment_menu(self, user_id, chat_id, message_id=None):
-        """Show payment donation menu"""
+        """Show payment donation menu with fallback for unconfigured payments"""
+        payment_enabled = self.payment_system.is_configured
+        
+        if not payment_enabled:
+            fallback_text = """💳 <b>Support Our Development</b>
+
+While we set up our secure payment system, you can support us by:
+
+🌟 <b>Alternative Support Methods:</b>
+• 📢 Share our bot with friends
+• 🎮 Request games you'd like to see
+• ⭐ Rate our bot positively
+• 🔗 Promote our channel
+
+🎉 <b>Coming Soon:</b>
+• Secure Telegram payments
+• Premium features for supporters
+• Exclusive game access
+
+Thank you for your support! 🙏"""
+
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "📝 Request Game", "callback_data": "request_game"}],
+                    [{"text": "📢 Share Bot", "switch_inline_query": "Check out this amazing games bot!"}],
+                    [{"text": "🔄 Check Payment Status", "callback_data": "payment_menu"}],
+                    [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+                ]
+            }
+            
+            if message_id:
+                self.edit_message(chat_id, message_id, fallback_text, keyboard)
+            else:
+                self.robust_send_message(chat_id, fallback_text, keyboard)
+            return
+        
+        # Original payment menu when enabled
         balance = self.payment_system.get_balance()
         recent_transactions = self.payment_system.get_recent_transactions(3)
         
