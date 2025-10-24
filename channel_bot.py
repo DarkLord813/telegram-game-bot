@@ -17,7 +17,7 @@ print("Code Verification + Channel Join + Game Scanner")
 print("Admin Game Uploads Enabled + Forward Support + Game Search")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
 print("Admin Broadcast Messaging System + Keep-Alive Protection")
-print("Telegram Payments Integration")
+print("Telegram Stars Payments Integration")
 print("Game Request System for Users")
 print("=" * 50)
 
@@ -28,34 +28,14 @@ print(f"🔍 DEBUG: Current directory: {os.getcwd()}")
 print(f"🔍 DEBUG: Files in directory: {os.listdir('.')}")
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-PAYMENT_PROVIDER_TOKEN = os.environ.get('PAYMENT_PROVIDER_TOKEN')
 
 print(f"🔍 DEBUG: BOT_TOKEN exists: {'YES' if BOT_TOKEN else 'NO'}")
-print(f"🔍 DEBUG: PAYMENT_PROVIDER_TOKEN exists: {'YES' if PAYMENT_PROVIDER_TOKEN else 'NO'}")
 
 if BOT_TOKEN:
     print(f"🔍 DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
     print(f"🔍 DEBUG: Token length: {len(BOT_TOKEN)}")
 else:
     print("❌ DEBUG: BOT_TOKEN is MISSING! Check Render Environment Variables")
-
-# ==================== ENVIRONMENT VARIABLES DEBUG ====================
-print(f"🔍 DEBUG: BOT_TOKEN loaded: {'YES' if BOT_TOKEN else 'NO'}")
-print(f"🔍 DEBUG: PAYMENT_PROVIDER_TOKEN loaded: {'YES' if PAYMENT_PROVIDER_TOKEN else 'NO'}")
-
-if PAYMENT_PROVIDER_TOKEN:
-    print(f"🔍 DEBUG: Payment token starts with: {PAYMENT_PROVIDER_TOKEN[:10]}...")
-    print(f"🔍 DEBUG: Payment token length: {len(PAYMENT_PROVIDER_TOKEN)}")
-else:
-    print("❌ DEBUG: PAYMENT_PROVIDER_TOKEN is MISSING!")
-    
-# List all available environment variables (for debugging)
-print("🔍 DEBUG: Available environment variables:")
-for key in os.environ:
-    if 'TOKEN' in key or 'BOT' in key or 'PAYMENT' in key:
-        value = os.environ[key]
-        masked_value = '*' * len(value) if value else 'EMPTY'
-        print(f"   {key}: {masked_value} (length: {len(value)})")
 
 # Test critical imports
 try:
@@ -111,7 +91,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Payments', 'Game Requests']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests']
         }
     })
 
@@ -184,95 +164,77 @@ class KeepAliveService:
         self.is_running = False
         print("🛑 Keep-alive service stopped")
 
-# ==================== TELEGRAM PAYMENT SYSTEM ====================
+# ==================== TELEGRAM STARS PAYMENT SYSTEM ====================
 
-class TelegramPaymentSystem:
+class TelegramStarsSystem:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.provider_token = PAYMENT_PROVIDER_TOKEN
-        self.is_configured = bool(self.provider_token)
+        self.setup_stars_database()
+        print("✅ Telegram Stars system initialized!")
         
-        if not self.is_configured:
-            print("⚠️ PAYMENT_PROVIDER_TOKEN not configured - payment features will be limited")
-        else:
-            print(f"✅ Payment system configured with provider token (length: {len(self.provider_token)})")
-            self.setup_payment_database()
-        
-    def setup_payment_database(self):
-        """Setup payments database"""
+    def setup_stars_database(self):
+        """Setup stars payments database"""
         try:
             cursor = self.bot.conn.cursor()
             
-            # Payment transactions table
+            # Stars transactions table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS payment_transactions (
+                CREATE TABLE IF NOT EXISTS stars_transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     user_name TEXT,
-                    amount REAL,
-                    currency TEXT DEFAULT 'USD',
+                    stars_amount INTEGER,
+                    usd_amount REAL,
                     description TEXT,
-                    telegram_payment_charge_id TEXT,
-                    provider_payment_charge_id TEXT,
+                    telegram_star_amount INTEGER,
+                    transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    invoice_payload TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    paid_at DATETIME
+                    completed_at DATETIME
                 )
             ''')
             
-            # Payment balance table
+            # Stars balance table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS payment_balance (
+                CREATE TABLE IF NOT EXISTS stars_balance (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    total_amount_earned REAL DEFAULT 0.0,
-                    total_amount_withdrawn REAL DEFAULT 0.0,
-                    available_balance REAL DEFAULT 0.0,
-                    currency TEXT DEFAULT 'USD',
+                    total_stars_earned INTEGER DEFAULT 0,
+                    total_usd_earned REAL DEFAULT 0.0,
+                    available_stars INTEGER DEFAULT 0,
+                    available_usd REAL DEFAULT 0.0,
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Initialize balance if not exists
-            cursor.execute('INSERT OR IGNORE INTO payment_balance (id) VALUES (1)')
+            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
             
             self.bot.conn.commit()
-            print("✅ Telegram payment system setup complete!")
+            print("✅ Telegram Stars database setup complete!")
             
         except Exception as e:
-            print(f"❌ Payment database setup error: {e}")
+            print(f"❌ Stars database setup error: {e}")
     
-    def create_invoice(self, user_id, chat_id, amount, currency='USD', description="Donation"):
-        """Create Telegram payment invoice"""
-        # Check if payment system is configured
-        if not self.is_configured:
-            error_msg = """❌ Payment system is not configured.
-
-💡 To enable payments, please configure:
-1. PAYMENT_PROVIDER_TOKEN environment variable
-2. Set up with a payment provider (Stripe, etc.)
-3. Contact bot administrator
-
-For now, you can support us by joining our channel and sharing the bot!"""
-            self.bot.robust_send_message(chat_id, error_msg)
-            return False
-            
+    def create_stars_invoice(self, user_id, chat_id, stars_amount, description="Donation"):
+        """Create Telegram Stars payment invoice"""
         try:
             # Generate unique invoice payload
-            invoice_payload = f"payment_{user_id}_{int(time.time())}"
+            invoice_payload = f"stars_{user_id}_{int(time.time())}"
             
-            # Prepare invoice data - amount in cents
-            prices = [{"label": description, "amount": int(amount * 100)}]
+            # Stars pricing (approximate conversion: 1 Star ≈ $0.01)
+            usd_amount = stars_amount * 0.01
+            
+            # Prepare stars invoice data
+            prices = [{"label": f"{stars_amount} Stars", "amount": stars_amount}]
             
             invoice_data = {
                 "chat_id": chat_id,
-                "title": "Bot Donation",
+                "title": "🌟 Bot Stars Donation",
                 "description": description,
                 "payload": invoice_payload,
-                "provider_token": self.provider_token,
-                "currency": currency,
+                "currency": "XTR",  # Telegram Stars currency
                 "prices": json.dumps(prices),
-                "start_parameter": "donation",
+                "start_parameter": "stars_donation",
                 "need_name": False,
                 "need_phone_number": False,
                 "need_email": False,
@@ -280,7 +242,7 @@ For now, you can support us by joining our channel and sharing the bot!"""
                 "is_flexible": False
             }
             
-            print(f"💰 Creating invoice for {amount} {currency}")
+            print(f"⭐ Creating Stars invoice for {stars_amount} stars (${usd_amount:.2f})")
             
             # Send invoice via Telegram API
             url = self.bot.base_url + "sendInvoice"
@@ -291,65 +253,65 @@ For now, you can support us by joining our channel and sharing the bot!"""
                 # Store transaction in database
                 cursor = self.bot.conn.cursor()
                 cursor.execute('''
-                    INSERT INTO payment_transactions 
-                    (user_id, user_name, amount, currency, description, invoice_payload, payment_status)
+                    INSERT INTO stars_transactions 
+                    (user_id, user_name, stars_amount, usd_amount, description, transaction_id, payment_status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     user_id,
                     self.bot.get_user_info(user_id)['first_name'],
-                    amount,
-                    currency,
+                    stars_amount,
+                    usd_amount,
                     description,
                     invoice_payload,
                     'pending'
                 ))
                 
                 self.bot.conn.commit()
-                print(f"✅ Invoice created for user {user_id}: ${amount} {currency}")
+                print(f"✅ Stars invoice created for user {user_id}: {stars_amount} stars")
                 return True
             else:
                 error_msg = result.get('description', 'Unknown error')
-                print(f"❌ Error creating invoice: {error_msg}")
+                print(f"❌ Error creating Stars invoice: {error_msg}")
                 return False
             
         except Exception as e:
-            print(f"❌ Error creating payment invoice: {e}")
+            print(f"❌ Error creating Stars invoice: {e}")
             traceback.print_exc()
             return False
     
     def get_balance(self):
-        """Get current payment balance"""
+        """Get current stars balance"""
         try:
             cursor = self.bot.conn.cursor()
-            cursor.execute('SELECT * FROM payment_balance WHERE id = 1')
+            cursor.execute('SELECT * FROM stars_balance WHERE id = 1')
             result = cursor.fetchone()
             
             if result:
                 return {
-                    'total_amount_earned': result[1] or 0.0,
-                    'total_amount_withdrawn': result[2] or 0.0,
-                    'available_balance': result[3] or 0.0,
-                    'currency': result[4] or 'USD',
+                    'total_stars_earned': result[1] or 0,
+                    'total_usd_earned': result[2] or 0.0,
+                    'available_stars': result[3] or 0,
+                    'available_usd': result[4] or 0.0,
                     'last_updated': result[5]
                 }
-            return {'available_balance': 0.0, 'currency': 'USD'}
+            return {'available_stars': 0, 'available_usd': 0.0}
         except Exception as e:
-            print(f"❌ Error getting payment balance: {e}")
-            return {'available_balance': 0.0, 'currency': 'USD'}
+            print(f"❌ Error getting stars balance: {e}")
+            return {'available_stars': 0, 'available_usd': 0.0}
     
     def get_recent_transactions(self, limit=5):
-        """Get recent payment transactions"""
+        """Get recent stars transactions"""
         try:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
-                SELECT user_name, amount, currency, payment_status, created_at 
-                FROM payment_transactions 
+                SELECT user_name, stars_amount, usd_amount, payment_status, created_at 
+                FROM stars_transactions 
                 ORDER BY created_at DESC 
                 LIMIT ?
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
-            print(f"❌ Error getting recent transactions: {e}")
+            print(f"❌ Error getting recent stars transactions: {e}")
             return []
 
 # ==================== GAME REQUEST SYSTEM ====================
@@ -502,10 +464,10 @@ class CrossPlatformBot:
         self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': ''}}
         self.broadcast_stats = {}     # Store broadcast statistics
         
-        # Payment and request systems
-        self.payment_system = TelegramPaymentSystem(self)
+        # Stars and request systems
+        self.stars_system = TelegramStarsSystem(self)
         self.game_request_system = GameRequestSystem(self)
-        self.payment_sessions = {}  # {user_id: {'amount': amount, 'currency': currency}}
+        self.stars_sessions = {}  # {user_id: {'stars_amount': amount}}
         self.request_sessions = {}  # {user_id: {'stage': 'waiting_game_name', 'game_name': ''}}
         
         # CRASH PROTECTION
@@ -533,7 +495,7 @@ class CrossPlatformBot:
         print("🔍 Game search feature enabled")
         print("🎮 Mini-games integrated: Number Guess, Random Number, Lucky Spin")
         print("📢 Admin broadcast messaging system enabled")
-        print(f"💳 Telegram payment system: {'ENABLED' if self.payment_system.is_configured else 'DISABLED'}")
+        print("⭐ Telegram Stars payments system enabled")
         print("🎮 Game request system enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
@@ -556,93 +518,60 @@ class CrossPlatformBot:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
 
-    # ==================== PAYMENT METHODS ====================
+    # ==================== STARS PAYMENT METHODS ====================
     
-    def show_payment_menu(self, user_id, chat_id, message_id=None):
-        """Show payment donation menu with fallback for unconfigured payments"""
-        payment_enabled = self.payment_system.is_configured
+    def show_stars_menu(self, user_id, chat_id, message_id=None):
+        """Show Telegram Stars donation menu"""
+        balance = self.stars_system.get_balance()
+        recent_transactions = self.stars_system.get_recent_transactions(3)
         
-        if not payment_enabled:
-            fallback_text = """💳 <b>Support Our Development</b>
+        stars_text = """⭐ <b>Support Our Bot with Telegram Stars!</b>
 
-While we set up our secure payment system, you can support us by:
+Telegram Stars are a simple way to support developers directly through Telegram.
 
-🌟 <b>Alternative Support Methods:</b>
-• 📢 Share our bot with friends
-• 🎮 Request games you'd like to see
-• ⭐ Rate our bot positively
-• 🔗 Promote our channel
-
-🎉 <b>Coming Soon:</b>
-• Secure Telegram payments
-• Premium features for supporters
-• Exclusive game access
-
-Thank you for your support! 🙏"""
-
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📝 Request Game", "callback_data": "request_game"}],
-                    [{"text": "📢 Share Bot", "switch_inline_query": "Check out this amazing games bot!"}],
-                    [{"text": "🔄 Check Payment Status", "callback_data": "payment_menu"}],
-                    [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-                ]
-            }
-            
-            if message_id:
-                self.edit_message(chat_id, message_id, fallback_text, keyboard)
-            else:
-                self.robust_send_message(chat_id, fallback_text, keyboard)
-            return
-        
-        # Original payment menu when enabled
-        balance = self.payment_system.get_balance()
-        recent_transactions = self.payment_system.get_recent_transactions(3)
-        
-        donation_text = """💳 <b>Support Our Bot with Payments!</b>
-
-Make secure payments using Telegram's payment system!
-
-🌟 <b>Why Donate?</b>
+🌟 <b>Why Donate Stars?</b>
 • Keep the bot running 24/7
 • Support new features development  
 • Help cover server costs
 • Get recognition in our donor list
 
-💫 <b>How it works:</b>
-1. Choose donation amount below
+💫 <b>How Stars Work:</b>
+1. Choose stars amount below
 2. Complete secure payment via Telegram
-3. Get instant confirmation
-4. Support our development!
+3. Stars go directly to support development
+4. Get instant confirmation!
 
-📊 <b>Payment Stats:</b>"""
+💰 <b>Conversion:</b> 1 Star ≈ $0.01
+
+📊 <b>Stars Stats:</b>"""
         
-        donation_text += f"\n• Total Received: <b>${balance['total_amount_earned']:.2f} {balance['currency']}</b>"
-        donation_text += f"\n• Available Balance: <b>${balance['available_balance']:.2f} {balance['currency']}</b>"
+        stars_text += f"\n• Total Stars Received: <b>{balance['total_stars_earned']} ⭐</b>"
+        stars_text += f"\n• Total USD Value: <b>${balance['total_usd_earned']:.2f}</b>"
+        stars_text += f"\n• Available Stars: <b>{balance['available_stars']} ⭐</b>"
         
         if recent_transactions:
-            donation_text += "\n\n🎉 <b>Recent Payments:</b>"
+            stars_text += "\n\n🎉 <b>Recent Donations:</b>"
             for transaction in recent_transactions:
-                donor_name, amount, currency, status, created_at = transaction
+                donor_name, stars_amount, usd_amount, status, created_at = transaction
                 date_str = datetime.fromisoformat(created_at).strftime('%m/%d')
                 status_icon = "✅" if status == 'completed' else "⏳"
-                donation_text += f"\n• {donor_name}: {status_icon} <b>${amount:.2f} {currency}</b>"
+                stars_text += f"\n• {donor_name}: {status_icon} <b>{stars_amount} ⭐ (${usd_amount:.2f})</b>"
         
-        donation_text += "\n\nThank you for considering supporting us! 🙏"
+        stars_text += "\n\nThank you for considering supporting us! 🙏"
         
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "💵 $5 USD", "callback_data": "payment_5"},
-                    {"text": "💵 $10 USD", "callback_data": "payment_10"}
+                    {"text": "⭐ 50 Stars ($0.50)", "callback_data": "stars_50"},
+                    {"text": "⭐ 100 Stars ($1.00)", "callback_data": "stars_100"}
                 ],
                 [
-                    {"text": "💵 $25 USD", "callback_data": "payment_25"},
-                    {"text": "💵 $50 USD", "callback_data": "payment_50"}
+                    {"text": "⭐ 500 Stars ($5.00)", "callback_data": "stars_500"},
+                    {"text": "⭐ 1000 Stars ($10.00)", "callback_data": "stars_1000"}
                 ],
                 [
-                    {"text": "💫 Custom Amount", "callback_data": "payment_custom"},
-                    {"text": "📊 Payment Stats", "callback_data": "payment_stats"}
+                    {"text": "💫 Custom Amount", "callback_data": "stars_custom"},
+                    {"text": "📊 Stars Stats", "callback_data": "stars_stats"}
                 ],
                 [
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
@@ -651,61 +580,57 @@ Make secure payments using Telegram's payment system!
         }
         
         if message_id:
-            self.edit_message(chat_id, message_id, donation_text, keyboard)
+            self.edit_message(chat_id, message_id, stars_text, keyboard)
         else:
-            self.robust_send_message(chat_id, donation_text, keyboard)
+            self.robust_send_message(chat_id, stars_text, keyboard)
     
-    def process_payment_donation(self, user_id, chat_id, amount, currency='USD'):
-        """Process payment donation"""
+    def process_stars_donation(self, user_id, chat_id, stars_amount):
+        """Process stars donation"""
         try:
-            print(f"💰 Processing payment: {amount} {currency} for user {user_id}")
+            print(f"⭐ Processing stars donation: {stars_amount} stars for user {user_id}")
             
-            success = self.payment_system.create_invoice(
-                user_id, chat_id, amount, currency, "Bot Donation"
+            success = self.stars_system.create_stars_invoice(
+                user_id, chat_id, stars_amount, "Bot Stars Donation"
             )
             
             if success:
                 return True
             else:
-                error_msg = "❌ Sorry, there was an error creating the payment. "
-                if not PAYMENT_PROVIDER_TOKEN:
-                    error_msg += "Payment provider token is not configured."
-                else:
-                    error_msg += "Please try again."
-                self.robust_send_message(chat_id, error_msg)
+                self.robust_send_message(chat_id, "❌ Sorry, there was an error creating the Stars invoice. Please try again.")
                 return False
                 
         except Exception as e:
-            print(f"❌ Payment donation processing error: {e}")
-            self.robust_send_message(chat_id, "❌ Sorry, there was an error processing your payment. Please try again.")
+            print(f"❌ Stars donation processing error: {e}")
+            self.robust_send_message(chat_id, "❌ Sorry, there was an error processing your Stars donation. Please try again.")
             return False
     
-    def show_payment_stats(self, user_id, chat_id, message_id):
-        """Show payment statistics"""
-        balance = self.payment_system.get_balance()
-        recent_transactions = self.payment_system.get_recent_transactions(10)
+    def show_stars_stats(self, user_id, chat_id, message_id):
+        """Show stars statistics"""
+        balance = self.stars_system.get_balance()
+        recent_transactions = self.stars_system.get_recent_transactions(10)
         
-        stats_text = """📊 <b>Payment Statistics</b>
+        stats_text = """📊 <b>Telegram Stars Statistics</b>
 
 💰 <b>Financial Overview:</b>"""
         
-        stats_text += f"\n• Total Amount Earned: <b>${balance['total_amount_earned']:.2f} {balance['currency']}</b>"
-        stats_text += f"\n• Total Amount Withdrawn: <b>${balance['total_amount_withdrawn']:.2f} {balance['currency']}</b>"
-        stats_text += f"\n• Available Balance: <b>${balance['available_balance']:.2f} {balance['currency']}</b>"
+        stats_text += f"\n• Total Stars Earned: <b>{balance['total_stars_earned']} ⭐</b>"
+        stats_text += f"\n• Total USD Earned: <b>${balance['total_usd_earned']:.2f}</b>"
+        stats_text += f"\n• Available Stars: <b>{balance['available_stars']} ⭐</b>"
+        stats_text += f"\n• Available USD: <b>${balance['available_usd']:.2f}</b>"
         stats_text += f"\n• Last Updated: {balance['last_updated'][:16] if balance['last_updated'] else 'Never'}"
         
         if recent_transactions:
             stats_text += "\n\n🎉 <b>Recent Transactions (Top 10):</b>"
             for i, transaction in enumerate(recent_transactions, 1):
-                donor_name, amount, currency, status, created_at = transaction
+                donor_name, stars_amount, usd_amount, status, created_at = transaction
                 date_str = datetime.fromisoformat(created_at).strftime('%m/%d %H:%M')
                 status_icon = "✅" if status == 'completed' else "⏳"
-                stats_text += f"\n{i}. {donor_name}: {status_icon} <b>${amount:.2f} {currency}</b> - {date_str}"
+                stats_text += f"\n{i}. {donor_name}: {status_icon} <b>{stars_amount} ⭐ (${usd_amount:.2f})</b> - {date_str}"
         
         keyboard = {
             "inline_keyboard": [
-                [{"text": "💳 Make Payment", "callback_data": "payment_menu"}],
-                [{"text": "🔄 Refresh Stats", "callback_data": "payment_stats"}],
+                [{"text": "⭐ Donate Stars", "callback_data": "stars_menu"}],
+                [{"text": "🔄 Refresh Stats", "callback_data": "stars_stats"}],
                 [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
             ]
         }
@@ -2411,31 +2336,30 @@ The file is now available in the games browser and search!"""
                 )
             ''')
             
-            # Payment tables
+            # Stars tables
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS payment_transactions (
+                CREATE TABLE IF NOT EXISTS stars_transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     user_name TEXT,
-                    amount REAL,
-                    currency TEXT DEFAULT 'USD',
+                    stars_amount INTEGER,
+                    usd_amount REAL,
                     description TEXT,
-                    telegram_payment_charge_id TEXT,
-                    provider_payment_charge_id TEXT,
+                    telegram_star_amount INTEGER,
+                    transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    invoice_payload TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    paid_at DATETIME
+                    completed_at DATETIME
                 )
             ''')
             
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS payment_balance (
+                CREATE TABLE IF NOT EXISTS stars_balance (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    total_amount_earned REAL DEFAULT 0.0,
-                    total_amount_withdrawn REAL DEFAULT 0.0,
-                    available_balance REAL DEFAULT 0.0,
-                    currency TEXT DEFAULT 'USD',
+                    total_stars_earned INTEGER DEFAULT 0,
+                    total_usd_earned REAL DEFAULT 0.0,
+                    available_stars INTEGER DEFAULT 0,
+                    available_usd REAL DEFAULT 0.0,
                     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -2456,7 +2380,7 @@ The file is now available in the games browser and search!"""
             ''')
             
             # Initialize balances if not exists
-            cursor.execute('INSERT OR IGNORE INTO payment_balance (id) VALUES (1)')
+            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
             
             self.conn.commit()
             print("✅ Database setup successful!")
@@ -2835,7 +2759,7 @@ The file is now available in the games browser and search!"""
                     {"text": "📝 Request Game", "callback_data": "request_game"}
                 ],
                 [
-                    {"text": "💳 Donate", "callback_data": "payment_menu"}
+                    {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
                 ],
                 [
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
@@ -2893,7 +2817,7 @@ The file is now available in the games browser and search!"""
                 {"text": "📝 Request Game", "callback_data": "request_game"}
             ],
             [
-                {"text": "💳 Donate", "callback_data": "payment_menu"}
+                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
             ]
         ]
         
@@ -2921,7 +2845,7 @@ The file is now available in the games browser and search!"""
                     {"text": "🎮 Game Requests", "callback_data": "admin_requests_panel"}
                 ],
                 [
-                    {"text": "💳 Payment Stats", "callback_data": "payment_stats"},
+                    {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
                     {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
                 ],
                 [
@@ -3138,31 +3062,31 @@ Use this ID for admin verification if needed."""
             
             self.answer_callback_query(callback_query['id'])
             
-            # Payment system callbacks
-            if data == "payment_menu":
-                self.show_payment_menu(user_id, chat_id, message_id)
+            # Stars system callbacks
+            if data == "stars_menu":
+                self.show_stars_menu(user_id, chat_id, message_id)
                 return
                 
-            elif data.startswith("payment_"):
-                if data == "payment_custom":
-                    # Start custom payment amount
-                    self.payment_sessions[user_id] = {'currency': 'USD'}
+            elif data.startswith("stars_"):
+                if data == "stars_custom":
+                    # Start custom stars amount
+                    self.stars_sessions[user_id] = {}
                     self.robust_send_message(chat_id, 
-                        "💫 <b>Custom Payment Amount</b>\n\n"
-                        "Please enter the amount you'd like to donate (in USD):\n\n"
-                        "💡 <i>Enter a number (e.g., 15 for $15)</i>"
+                        "💫 <b>Custom Stars Amount</b>\n\n"
+                        "Please enter the number of Stars you'd like to donate:\n\n"
+                        "💡 <i>Enter a number (e.g., 250 for 250 Stars ≈ $2.50)</i>"
                     )
-                elif data == "payment_stats":
-                    self.show_payment_stats(user_id, chat_id, message_id)
+                elif data == "stars_stats":
+                    self.show_stars_stats(user_id, chat_id, message_id)
                     return
                 else:
-                    # Process predefined payment amount
-                    amount_str = data.replace("payment_", "")
+                    # Process predefined stars amount
+                    stars_str = data.replace("stars_", "")
                     try:
-                        amount = float(amount_str)
-                        self.process_payment_donation(user_id, chat_id, amount)
+                        stars_amount = int(stars_str)
+                        self.process_stars_donation(user_id, chat_id, stars_amount)
                     except ValueError:
-                        self.robust_send_message(chat_id, "❌ Invalid amount.")
+                        self.robust_send_message(chat_id, "❌ Invalid stars amount.")
                 return
 
             # Game request system callbacks
@@ -3392,7 +3316,7 @@ Choose an option:"""
 • 🎮 Mini Games - Fun mini-games to play
 • 🔍 Search Games - Search for specific games
 • 📝 Request Game - Request games not in our collection
-• 💳 Donate - Support our bot with payments
+• ⭐ Donate Stars - Support our bot with Telegram Stars
 
 🔗 Channel: @pspgamers5"""
                 self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
@@ -3501,7 +3425,7 @@ Have fun! 🎉"""
 • 🕒 Real-time Updates
 • 🎮 Mini-Games Entertainment
 • 📢 Admin Broadcast System
-• 💳 Telegram Payments
+• ⭐ Telegram Stars Payments
 • 🎮 Game Request System
 • 🔋 Keep-Alive Protection
 
@@ -3521,7 +3445,7 @@ Choose an option below:"""
 • 📁 All Game Categories
 • 🕒 Real-time Updates
 • 🎮 Mini-Games
-• 💳 Payments
+• ⭐ Stars Donations
 • 🎮 Game Requests
 
 📢 Channel: @pspgamers5
@@ -3551,7 +3475,7 @@ Choose an option below:"""
 • 🔍 Scan bot-uploaded games
 • 📢 Broadcast messages to users
 • 🎮 Manage game requests
-• 💳 View payment statistics
+• ⭐ View Stars statistics
 • 🔍 Monitor system status
 
 📊 Your Stats:
@@ -3703,7 +3627,7 @@ After code verification, you'll need to join our channel."""
 • 📁 All Game Categories
 • 🕒 Real-time Updates
 • 🎮 Mini-Games
-• 💳 Payments
+• ⭐ Stars Donations
 • 🎮 Game Requests
 
 📢 Channel: @pspgamers5
@@ -3759,21 +3683,19 @@ After joining, click the button below:"""
                         # User provided platform, complete the request
                         return self.complete_game_request(user_id, chat_id, text)
                 
-                # Handle payment custom amount input SECOND
-                if user_id in self.payment_sessions:
+                # Handle stars custom amount input SECOND
+                if user_id in self.stars_sessions:
                     try:
-                        amount = float(text.strip())
-                        if amount <= 0:
-                            self.robust_send_message(chat_id, "❌ Please enter a positive amount.")
+                        stars_amount = int(text.strip())
+                        if stars_amount <= 0:
+                            self.robust_send_message(chat_id, "❌ Please enter a positive number of Stars.")
                             return True
                         
-                        # Process the payment
-                        payment_info = self.payment_sessions[user_id]
-                        currency = payment_info.get('currency', 'USD')
-                        del self.payment_sessions[user_id]
-                        return self.process_payment_donation(user_id, chat_id, amount, currency)
+                        # Process the stars donation
+                        del self.stars_sessions[user_id]
+                        return self.process_stars_donation(user_id, chat_id, stars_amount)
                     except ValueError:
-                        self.robust_send_message(chat_id, "❌ Please enter a valid number for the amount.")
+                        self.robust_send_message(chat_id, "❌ Please enter a valid number for the Stars amount.")
                         return True
                 
                 # Handle broadcast messages from admins
@@ -3820,8 +3742,8 @@ Have fun! 🎉"""
                         return self.generate_random_number(user_id, chat_id)
                     elif text == '/spin' and self.is_user_completed(user_id):
                         return self.lucky_spin(user_id, chat_id)
-                    elif text == '/donate' and self.is_user_completed(user_id):
-                        self.show_payment_menu(user_id, chat_id)
+                    elif text == '/stars' and self.is_user_completed(user_id):
+                        self.show_stars_menu(user_id, chat_id)
                         return True
                     elif text == '/request' and self.is_user_completed(user_id):
                         return self.start_game_request(user_id, chat_id)
@@ -3867,8 +3789,8 @@ Health URL: {self.keep_alive.health_url if self.keep_alive else 'Not set'}
 This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                         self.robust_send_message(chat_id, keepalive_text)
                         return True
-                    elif text == '/paymentstats' and self.is_admin(user_id):
-                        self.show_payment_stats(user_id, chat_id)
+                    elif text == '/starsstats' and self.is_admin(user_id):
+                        self.show_stars_stats(user_id, chat_id)
                         return True
                 
                 # Handle code verification
@@ -3907,9 +3829,9 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("🤖 Bot is running with full protection...")
         print("📝 Send /start to begin")
         print("🎮 Mini-games available: /minigames")
-        print("💳 Donations: /donate")
+        print("⭐ Stars donations: /stars")
         print("📝 Game requests: /request")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /paymentstats, /keepalive")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /starsstats, /keepalive")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
         print("🛑 Press Ctrl+C to stop")
@@ -3983,7 +3905,6 @@ except ImportError:
 
 # Get tokens from environment variables
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-PAYMENT_PROVIDER_TOKEN = os.environ.get('PAYMENT_PROVIDER_TOKEN')
 
 if not BOT_TOKEN:
     print("❌ ERROR: BOT_TOKEN environment variable not set!")
@@ -3992,10 +3913,6 @@ if not BOT_TOKEN:
     print("   - OR create a .env file with BOT_TOKEN=your_token")
     # Don't exit - let the health server continue running
     print("💡 Health server will continue running for monitoring")
-
-if not PAYMENT_PROVIDER_TOKEN:
-    print("⚠️ WARNING: PAYMENT_PROVIDER_TOKEN environment variable not set!")
-    print("💡 Payment features will be limited without provider token")
 
 # Test the token before starting
 def test_bot_connection(token):
