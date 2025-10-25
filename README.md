@@ -10,6 +10,7 @@ A cross-platform Telegram bot for game distribution with mini-games integration.
 - 👑 **Admin Panel** - Game uploads, statistics, management
 - 🔍 **Advanced Search** - Real-time game search
 - 📱 **Cross-Platform** - Supports multiple game formats
+- ⭐ **Star Payment** - Supports donations from users
 
 ## 🚀 Quick Deployment
 
