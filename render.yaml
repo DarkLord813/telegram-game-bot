@@ -1,7 +1,16 @@
+# Exported from Render on 2025-10-30T06:14:51Z
+version: "1"
 services:
-  - type: web
-    name: telegram-game-bot
-    env: python 3
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: python channel_bot.py
+- type: web
+  name: telegram-game-bot-1
+  runtime: python
+  repo: https://github.com/DarkLord813/telegram-game-bot
+  plan: free
+  envVars:
+  - key: BOT_TOKEN
+    sync: false
+  region: oregon
+  buildCommand: pip install -r requirements.txt
+  startCommand: python channel_bot.py
+  healthCheckPath: /health
+  autoDeployTrigger: commit
