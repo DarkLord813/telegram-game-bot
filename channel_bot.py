@@ -19,6 +19,7 @@ print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
 print("Admin Broadcast Messaging System + Keep-Alive Protection")
 print("Telegram Stars Payments Integration")
 print("Game Request System for Users")
+print("Full Channel History Scanner + Real-time Search")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -91,7 +92,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Full Channel Scanner']
         }
     })
 
@@ -499,6 +500,7 @@ class CrossPlatformBot:
         print("🎮 Game request system enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
+        print("📊 Full channel history scanner enabled")
     
     def start_keep_alive(self):
         """Start the keep-alive service"""
@@ -517,6 +519,245 @@ class CrossPlatformBot:
         except Exception as e:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
+
+    # ==================== FULL CHANNEL HISTORY SCANNER ====================
+
+    def scan_full_channel_history(self):
+        """Scan the entire channel history for games from beginning to end"""
+        try:
+            print(f"🔍 Starting full channel history scan for {self.REQUIRED_CHANNEL}...")
+            
+            all_games = []
+            offset_id = 0
+            batch_count = 0
+            max_batches = 100  # Safety limit to prevent infinite loops
+            
+            while batch_count < max_batches:
+                url = self.base_url + "getChatHistory"
+                data = {
+                    "chat_id": self.REQUIRED_CHANNEL,
+                    "limit": 100
+                }
+                
+                if offset_id > 0:
+                    data["from_message_id"] = offset_id
+                
+                response = requests.post(url, data=data, timeout=30)
+                result = response.json()
+                
+                if not result.get('ok'):
+                    print(f"❌ Error getting channel history: {result.get('description')}")
+                    break
+                
+                messages = result.get('result', [])
+                if not messages:
+                    print("✅ Reached end of channel history")
+                    break
+                
+                batch_games = 0
+                for message in messages:
+                    game_info = self.extract_game_info(message)
+                    if game_info:
+                        all_games.append(game_info)
+                        batch_games += 1
+                
+                # Update offset to the oldest message in this batch
+                if messages:
+                    offset_id = min(msg['message_id'] for msg in messages) - 1
+                
+                batch_count += 1
+                print(f"📦 Batch {batch_count}: Found {batch_games} games in {len(messages)} messages")
+                
+                # Small delay to avoid rate limits
+                time.sleep(0.5)
+            
+            # Store all found games
+            if all_games:
+                self.store_games_in_db(all_games)
+                print(f"✅ Full history scan complete! Found {len(all_games)} total games")
+            else:
+                print("ℹ️ No games found in channel history")
+            
+            return len(all_games)
+            
+        except Exception as e:
+            print(f"❌ Full history scan error: {e}")
+            return 0
+
+    def scan_channel_with_date_range(self, days_back=30):
+        """Scan channel for games within a specific date range"""
+        try:
+            print(f"🔍 Scanning channel for games from last {days_back} days...")
+            
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+            all_games = []
+            offset_id = 0
+            should_continue = True
+            
+            while should_continue:
+                url = self.base_url + "getChatHistory"
+                data = {
+                    "chat_id": self.REQUIRED_CHANNEL,
+                    "limit": 100
+                }
+                
+                if offset_id > 0:
+                    data["from_message_id"] = offset_id
+                
+                response = requests.post(url, data=data, timeout=30)
+                result = response.json()
+                
+                if not result.get('ok'):
+                    break
+                
+                messages = result.get('result', [])
+                if not messages:
+                    break
+                
+                batch_has_old_messages = False
+                
+                for message in messages:
+                    message_date = datetime.fromtimestamp(message['date'])
+                    
+                    # Stop if we've reached messages older than our cutoff
+                    if message_date < cutoff_date:
+                        batch_has_old_messages = True
+                        continue
+                    
+                    game_info = self.extract_game_info(message)
+                    if game_info:
+                        all_games.append(game_info)
+                
+                # Update offset
+                if messages:
+                    offset_id = min(msg['message_id'] for msg in messages) - 1
+                
+                # Stop if this batch contained old messages
+                if batch_has_old_messages:
+                    should_continue = False
+                
+                time.sleep(0.3)
+            
+            if all_games:
+                self.store_games_in_db(all_games)
+                print(f"✅ Date range scan complete! Found {len(all_games)} recent games")
+            
+            return len(all_games)
+            
+        except Exception as e:
+            print(f"❌ Date range scan error: {e}")
+            return 0
+
+    # ==================== ENHANCED GAME SEARCH WITH CHANNEL INTEGRATION ====================
+
+    def search_games(self, search_term, user_id):
+        """Enhanced search that includes both database and real-time channel search"""
+        search_term = search_term.lower().strip()
+        results = []
+        
+        # Show search progress
+        if user_id in self.search_sessions:
+            self.search_sessions[user_id]['progress'] = 10
+            self.search_sessions[user_id]['message'] = "🔍 Starting search..."
+        
+        # Step 1: Search in database
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT message_id, file_name, file_type, file_size, upload_date, category, file_id, 
+                   bot_message_id, is_uploaded, is_forwarded
+            FROM channel_games 
+            WHERE LOWER(file_name) LIKE ? OR file_name LIKE ? OR category LIKE ?
+        ''', (f'%{search_term}%', f'%{search_term}%', f'%{search_term}%'))
+        
+        db_results = cursor.fetchall()
+        
+        if user_id in self.search_sessions:
+            self.search_sessions[user_id]['progress'] = 50
+            self.search_sessions[user_id]['message'] = f"📁 Found {len(db_results)} in database, scanning channel..."
+        
+        # Step 2: Search in channel (real-time)
+        channel_results = self.search_channel_realtime(search_term)
+        
+        if user_id in self.search_sessions:
+            self.search_sessions[user_id]['progress'] = 80
+            self.search_sessions[user_id]['message'] = "🔍 Processing results..."
+        
+        # Combine and deduplicate results
+        all_game_ids = set()
+        
+        # Process database results
+        for game in db_results:
+            (message_id, file_name, file_type, file_size, upload_date, 
+             category, file_id, bot_message_id, is_uploaded, is_forwarded) = game
+            
+            game_key = f"{message_id}_{file_name}"
+            if game_key not in all_game_ids:
+                results.append({
+                    'message_id': message_id,
+                    'file_name': file_name,
+                    'file_type': file_type,
+                    'file_size': file_size,
+                    'upload_date': upload_date,
+                    'category': category,
+                    'file_id': file_id,
+                    'bot_message_id': bot_message_id,
+                    'is_uploaded': is_uploaded,
+                    'is_forwarded': is_forwarded,
+                    'source': 'database'
+                })
+                all_game_ids.add(game_key)
+        
+        # Process channel results
+        for game in channel_results:
+            game_key = f"{game['message_id']}_{game['file_name']}"
+            if game_key not in all_game_ids:
+                results.append({
+                    **game,
+                    'source': 'channel_realtime'
+                })
+                all_game_ids.add(game_key)
+        
+        # Sort by relevance (exact matches first, then partial matches)
+        results.sort(key=lambda x: (
+            search_term not in x['file_name'].lower(),
+            x['file_name'].lower().find(search_term),
+            len(x['file_name'])
+        ))
+        
+        return results
+
+    def search_channel_realtime(self, search_term):
+        """Search the channel in real-time for games matching the search term"""
+        try:
+            print(f"🔍 Real-time channel search for: {search_term}")
+            
+            found_games = []
+            search_term_lower = search_term.lower()
+            
+            # Search recent messages first (last 200 messages)
+            url = self.base_url + "getChatHistory"
+            data = {
+                "chat_id": self.REQUIRED_CHANNEL,
+                "limit": 200
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                messages = result.get('result', [])
+                
+                for message in messages:
+                    game_info = self.extract_game_info(message)
+                    if game_info and search_term_lower in game_info['file_name'].lower():
+                        found_games.append(game_info)
+            
+            print(f"✅ Real-time channel search found {len(found_games)} results")
+            return found_games
+            
+        except Exception as e:
+            print(f"❌ Real-time channel search error: {e}")
+            return []
 
     # ==================== STARS PAYMENT METHODS ====================
     
@@ -2004,62 +2245,6 @@ The file is now available in the games browser and search!"""
 
     # ==================== SEARCH GAMES METHODS ====================
     
-    def search_games(self, search_term, user_id):
-        search_term = search_term.lower().strip()
-        results = []
-        
-        total_steps = 5
-        progress_messages = [
-            "🔍 Starting search...",
-            "📁 Scanning database...",
-            "🔎 Matching files...",
-            "📊 Analyzing results...",
-            "✅ Search complete!"
-        ]
-        
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT message_id, file_name, file_type, file_size, upload_date, category, file_id, 
-                   bot_message_id, is_uploaded, is_forwarded
-            FROM channel_games 
-            WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
-        ''', (f'%{search_term}%', f'%{search_term}%'))
-        
-        all_games = cursor.fetchall()
-        
-        for step in range(total_steps):
-            progress = int((step + 1) * 100 / total_steps)
-            
-            if user_id in self.search_sessions:
-                self.search_sessions[user_id]['progress'] = progress
-                self.search_sessions[user_id]['message'] = progress_messages[step]
-            
-            time.sleep(0.3)
-            
-            if step == total_steps - 1:
-                for game in all_games:
-                    (message_id, file_name, file_type, file_size, upload_date, 
-                     category, file_id, bot_message_id, is_uploaded, is_forwarded) = game
-                    
-                    # More flexible matching
-                    if (search_term in file_name.lower() or 
-                        search_term.replace(' ', '').lower() in file_name.lower().replace(' ', '') or
-                        any(word in file_name.lower() for word in search_term.split())):
-                        results.append({
-                            'message_id': message_id,
-                            'file_name': file_name,
-                            'file_type': file_type,
-                            'file_size': file_size,
-                            'upload_date': upload_date,
-                            'category': category,
-                            'file_id': file_id,
-                            'bot_message_id': bot_message_id,
-                            'is_uploaded': is_uploaded,
-                            'is_forwarded': is_forwarded
-                        })
-        
-        return results
-    
     def create_search_results_buttons(self, results, search_term, user_id, page=0):
         results_per_page = 5
         start_idx = page * results_per_page
@@ -2473,12 +2658,20 @@ The file is now available in the games browser and search!"""
             return 0
     
     def extract_game_info(self, message):
+        """Enhanced game info extraction with better file type detection"""
         try:
             if 'document' in message:
                 doc = message['document']
                 file_name = doc.get('file_name', '').lower()
                 
-                game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+                # Expanded list of game file extensions
+                game_extensions = [
+                    '.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', 
+                    '.cs0', '.apk', '.exe', '.bin', '.nds', '.gba', '.gb', 
+                    '.gbc', '.nes', '.smc', '.sfc', '.md', '.gen', '.sms',
+                    '.ps1', '.ps2', '.psp', '.psx', '.xiso', '.cci', '.3ds'
+                ]
+                
                 if any(file_name.endswith(ext) for ext in game_extensions):
                     file_type = file_name.split('.')[-1].upper()
                     upload_date = datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S')
@@ -2849,6 +3042,10 @@ The file is now available in the games browser and search!"""
                     {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
                 ],
                 [
+                    {"text": "📊 Full Channel Scan", "callback_data": "full_channel_scan"},
+                    {"text": "🕒 Recent Games Scan", "callback_data": "recent_games_scan"}
+                ],
+                [
                     {"text": "📊 Profile", "callback_data": "profile"},
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
                 ]
@@ -3101,6 +3298,47 @@ Use this ID for admin verification if needed."""
             # Admin game request management
             elif data == "admin_requests_panel":
                 self.show_admin_requests_panel(user_id, chat_id, message_id)
+                return
+
+            # Full channel scanner callbacks
+            elif data == "full_channel_scan":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                self.edit_message(chat_id, message_id, "🔍 Starting full channel history scan... This may take several minutes.", self.create_admin_buttons())
+                
+                def perform_full_scan():
+                    try:
+                        games_found = self.scan_full_channel_history()
+                        self.update_games_cache()
+                        result_text = f"✅ Full channel scan complete!\n\n📊 Found {games_found} games total\n🔄 Cache updated with {len(self.games_cache.get('all', []))} games"
+                        self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+                    except Exception as e:
+                        self.robust_send_message(chat_id, f"❌ Full scan failed: {str(e)}", self.create_admin_buttons())
+                
+                scan_thread = threading.Thread(target=perform_full_scan, daemon=True)
+                scan_thread.start()
+                return
+
+            elif data == "recent_games_scan":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                self.edit_message(chat_id, message_id, "🔍 Scanning for recent games (last 30 days)...", self.create_admin_buttons())
+                
+                def perform_recent_scan():
+                    try:
+                        games_found = self.scan_channel_with_date_range(30)
+                        self.update_games_cache()
+                        result_text = f"✅ Recent games scan complete!\n\n📊 Found {games_found} recent games\n🔄 Cache updated"
+                        self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+                    except Exception as e:
+                        self.robust_send_message(chat_id, f"❌ Recent scan failed: {str(e)}", self.create_admin_buttons())
+                
+                scan_thread = threading.Thread(target=perform_recent_scan, daemon=True)
+                scan_thread.start()
                 return
 
             # Broadcast system callbacks
@@ -3428,6 +3666,7 @@ Have fun! 🎉"""
 • ⭐ Telegram Stars Payments
 • 🎮 Game Request System
 • 🔋 Keep-Alive Protection
+• 📊 Full Channel History Scanner
 
 Choose an option below:"""
                 self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
@@ -3476,6 +3715,8 @@ Choose an option below:"""
 • 📢 Broadcast messages to users
 • 🎮 Manage game requests
 • ⭐ View Stars statistics
+• 📊 Full channel history scan
+• 🕒 Recent games scan
 • 🔍 Monitor system status
 
 📊 Your Stats:
@@ -3752,6 +3993,16 @@ Have fun! 🎉"""
                     elif text == '/cleargames' and self.is_admin(user_id):
                         self.clear_all_games(user_id, chat_id, message['message_id'])
                         return True
+                    elif text == '/fullscan' and self.is_admin(user_id):
+                        self.robust_send_message(chat_id, "🔍 Starting full channel history scan... This may take several minutes.")
+                        games_found = self.scan_full_channel_history()
+                        self.robust_send_message(chat_id, f"✅ Full channel scan complete! Found {games_found} games total.")
+                        return True
+                    elif text == '/recentscan' and self.is_admin(user_id):
+                        self.robust_send_message(chat_id, "🔍 Scanning for recent games (last 30 days)...")
+                        games_found = self.scan_channel_with_date_range(30)
+                        self.robust_send_message(chat_id, f"✅ Recent games scan complete! Found {games_found} recent games.")
+                        return True
                     elif text == '/debug_uploads' and self.is_admin(user_id):
                         cursor = self.conn.cursor()
                         cursor.execute('''
@@ -3831,9 +4082,10 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("🎮 Mini-games available: /minigames")
         print("⭐ Stars donations: /stars")
         print("📝 Game requests: /request")
-        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /starsstats, /keepalive")
+        print("👑 Admin commands: /scan, /cleargames, /debug_uploads, /broadcast, /starsstats, /keepalive, /fullscan, /recentscan")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
+        print("📊 Full channel history scanner enabled")
         print("🛑 Press Ctrl+C to stop")
         
         offset = 0
