@@ -24,6 +24,7 @@ print("Game Request System for Users")
 print("Premium Games System with Stars Payments")
 print("Enhanced Broadcast with Photos")
 print("Individual Game Request Replies")
+print("Game Removal System with Duplicate Detection")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -96,7 +97,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System']
         }
     })
 
@@ -699,8 +700,9 @@ class PremiumGamesSystem:
         try:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
-                SELECT id, file_name, file_type, file_size, stars_price, description, upload_date
+                SELECT id, file_name, file_type, file_size, stars_price, description, upload_date, file_id, bot_message_id, is_uploaded
                 FROM premium_games 
+                WHERE is_premium = 1
                 ORDER BY created_at DESC 
                 LIMIT ?
             ''', (limit,))
@@ -839,6 +841,8 @@ class CrossPlatformBot:
         print("💰 Premium games system enabled")
         print("📝 Individual request replies enabled")
         print("🖼️ Photo broadcast support enabled")
+        print("🗑️ Game removal system enabled")
+        print("🛡️ Duplicate detection enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system ready")
     
@@ -860,11 +864,338 @@ class CrossPlatformBot:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
 
+    # ==================== DUPLICATE DETECTION SYSTEM ====================
+    
+    def check_duplicate_game(self, file_name, file_size, file_type):
+        """Check if a game already exists in database"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Check in regular games
+            cursor.execute('''
+                SELECT message_id, file_name FROM channel_games 
+                WHERE file_name = ? AND file_size = ? AND file_type = ?
+            ''', (file_name, file_size, file_type))
+            regular_duplicate = cursor.fetchone()
+            
+            # Check in premium games
+            cursor.execute('''
+                SELECT id, file_name FROM premium_games 
+                WHERE file_name = ? AND file_size = ? AND file_type = ?
+            ''', (file_name, file_size, file_type))
+            premium_duplicate = cursor.fetchone()
+            
+            return regular_duplicate, premium_duplicate
+            
+        except Exception as e:
+            print(f"❌ Error checking duplicates: {e}")
+            return None, None
+
+    # ==================== GAME REMOVAL SYSTEM ====================
+    
+    def show_remove_game_menu(self, user_id, chat_id, message_id):
+        """Show game removal menu for admins"""
+        if not self.is_admin(user_id):
+            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
+            return
+        
+        remove_text = """🗑️ <b>Game Removal System</b>
+
+Remove games from the database.
+
+🔍 <b>How to use:</b>
+1. Search for the game you want to remove
+2. View search results
+3. Click "Remove" button next to any game
+4. Confirm removal
+
+⚠️ <b>Warning:</b> This action cannot be undone!
+
+Choose an option:"""
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔍 Search & Remove Game", "callback_data": "search_remove_game"}],
+                [{"text": "📋 View Recent Uploads", "callback_data": "view_recent_uploads"}],
+                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, remove_text, keyboard)
+
+    def start_remove_game_search(self, user_id, chat_id):
+        """Start game removal search process"""
+        if not self.is_admin(user_id):
+            return False
+        
+        self.robust_send_message(chat_id,
+            "🔍 <b>Game Removal Search</b>\n\n"
+            "Please enter the game name you want to search and remove:\n\n"
+            "💡 You can search by full name or partial keywords"
+        )
+        
+        # Set session for removal search
+        self.search_sessions[user_id] = {'mode': 'remove'}
+        return True
+
+    def handle_remove_game_search(self, message):
+        """Handle game removal search"""
+        try:
+            user_id = message['from']['id']
+            chat_id = message['chat']['id']
+            search_term = message.get('text', '').strip()
+            
+            if not search_term:
+                return False
+            
+            if not self.is_admin(user_id):
+                self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
+                return True
+            
+            print(f"🔍 Admin {user_id} searching for removal: '{search_term}'")
+            
+            # Search in both regular and premium games
+            cursor = self.conn.cursor()
+            
+            # Search regular games
+            cursor.execute('''
+                SELECT message_id, file_name, file_type, file_size, upload_date, category, 
+                       file_id, bot_message_id, is_uploaded, is_forwarded
+                FROM channel_games 
+                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
+                ORDER BY file_name
+                LIMIT 20
+            ''', (f'%{search_term}%', f'%{search_term}%'))
+            
+            regular_results = cursor.fetchall()
+            
+            # Search premium games
+            cursor.execute('''
+                SELECT id, file_name, file_type, file_size, stars_price, description, 
+                       upload_date, file_id, bot_message_id, is_uploaded
+                FROM premium_games 
+                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
+                ORDER BY file_name
+                LIMIT 20
+            ''', (f'%{search_term}%', f'%{search_term}%'))
+            
+            premium_results = cursor.fetchall()
+            
+            all_results = []
+            
+            # Format regular games results
+            for game in regular_results:
+                (message_id, file_name, file_type, file_size, upload_date, 
+                 category, file_id, bot_message_id, is_uploaded, is_forwarded) = game
+                
+                all_results.append({
+                    'type': 'regular',
+                    'id': message_id,
+                    'file_name': file_name,
+                    'file_type': file_type,
+                    'file_size': file_size,
+                    'upload_date': upload_date,
+                    'category': category,
+                    'file_id': file_id,
+                    'bot_message_id': bot_message_id,
+                    'is_uploaded': is_uploaded,
+                    'is_forwarded': is_forwarded
+                })
+            
+            # Format premium games results
+            for game in premium_results:
+                (game_id, file_name, file_type, file_size, stars_price, description,
+                 upload_date, file_id, bot_message_id, is_uploaded) = game
+                
+                all_results.append({
+                    'type': 'premium',
+                    'id': game_id,
+                    'file_name': file_name,
+                    'file_type': file_type,
+                    'file_size': file_size,
+                    'stars_price': stars_price,
+                    'description': description,
+                    'upload_date': upload_date,
+                    'file_id': file_id,
+                    'bot_message_id': bot_message_id,
+                    'is_uploaded': is_uploaded
+                })
+            
+            if not all_results:
+                self.robust_send_message(chat_id, 
+                    f"❌ No games found for: <code>{search_term}</code>\n\n"
+                    "💡 Try different keywords or check the spelling."
+                )
+                return True
+            
+            # Create removal results message
+            results_text = f"""🔍 <b>Removal Search Results</b>
+
+Search: <code>{search_term}</code>
+Found: {len(all_results)} games
+
+⚠️ <b>Click "Remove" to delete any game:</b>\n\n"""
+            
+            for i, game in enumerate(all_results, 1):
+                game_type = "🆓 Regular" if game['type'] == 'regular' else "💰 Premium"
+                size = self.format_file_size(game['file_size'])
+                
+                results_text += f"{i}. <b>{game['file_name']}</b>\n"
+                results_text += f"   📦 {game['file_type']} | 📏 {size} | {game_type}\n"
+                
+                if game['type'] == 'premium':
+                    results_text += f"   ⭐ {game['stars_price']} Stars\n"
+                
+                results_text += f"   🆔 {game['id']} | 📅 {game['upload_date'][:10]}\n\n"
+            
+            # Create removal buttons
+            keyboard_buttons = []
+            for game in all_results[:10]:  # Show first 10 results
+                game_type_char = "R" if game['type'] == 'regular' else "P"
+                button_text = f"🗑️ {game['file_name'][:20]}{'...' if len(game['file_name']) > 20 else ''}"
+                
+                keyboard_buttons.append([{
+                    "text": button_text,
+                    "callback_data": f"confirm_remove_{game_type_char}_{game['id']}"
+                }])
+            
+            keyboard_buttons.extend([
+                [{"text": "🔍 New Search", "callback_data": "search_remove_game"}],
+                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+            ])
+            
+            keyboard = {"inline_keyboard": keyboard_buttons}
+            
+            self.robust_send_message(chat_id, results_text, keyboard)
+            return True
+            
+        except Exception as e:
+            print(f"❌ Remove game search error: {e}")
+            self.robust_send_message(chat_id, "❌ Error searching for games. Please try again.")
+            return False
+
+    def remove_game(self, user_id, chat_id, game_type, game_id, message_id=None):
+        """Remove a game from database"""
+        try:
+            if not self.is_admin(user_id):
+                return False
+            
+            cursor = self.conn.cursor()
+            
+            if game_type == 'R':  # Regular game
+                # Get game info before deletion
+                cursor.execute('SELECT file_name FROM channel_games WHERE message_id = ?', (game_id,))
+                game_info = cursor.fetchone()
+                
+                if not game_info:
+                    self.answer_callback_query(message_id, "❌ Game not found.", True)
+                    return False
+                
+                file_name = game_info[0]
+                
+                # Delete the game
+                cursor.execute('DELETE FROM channel_games WHERE message_id = ?', (game_id,))
+                self.conn.commit()
+                
+                # Update cache
+                self.update_games_cache()
+                
+                result_text = f"✅ <b>Regular Game Removed</b>\n\n📁 <code>{file_name}</code>\n🆔 {game_id}\n\nGame has been removed from the database."
+                
+            elif game_type == 'P':  # Premium game
+                # Get game info before deletion
+                cursor.execute('SELECT file_name FROM premium_games WHERE id = ?', (game_id,))
+                game_info = cursor.fetchone()
+                
+                if not game_info:
+                    self.answer_callback_query(message_id, "❌ Premium game not found.", True)
+                    return False
+                
+                file_name = game_info[0]
+                
+                # Delete the game and associated purchases
+                cursor.execute('DELETE FROM premium_games WHERE id = ?', (game_id,))
+                cursor.execute('DELETE FROM premium_purchases WHERE game_id = ?', (game_id,))
+                self.conn.commit()
+                
+                result_text = f"✅ <b>Premium Game Removed</b>\n\n📁 <code>{file_name}</code>\n🆔 {game_id}\n\nGame and all purchase records have been removed."
+            
+            else:
+                self.answer_callback_query(message_id, "❌ Invalid game type.", True)
+                return False
+            
+            print(f"🗑️ Admin {user_id} removed {game_type} game: {file_name} (ID: {game_id})")
+            
+            if message_id:
+                self.edit_message(chat_id, message_id, result_text, self.create_admin_buttons())
+            else:
+                self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Remove game error: {e}")
+            self.answer_callback_query(message_id, "❌ Error removing game.", True)
+            return False
+
+    def show_remove_confirmation(self, user_id, chat_id, message_id, game_type, game_id):
+        """Show removal confirmation dialog"""
+        if not self.is_admin(user_id):
+            return False
+        
+        try:
+            cursor = self.conn.cursor()
+            
+            if game_type == 'R':
+                cursor.execute('SELECT file_name, file_size, file_type FROM channel_games WHERE message_id = ?', (game_id,))
+                table_name = "channel_games"
+            else:
+                cursor.execute('SELECT file_name, file_size, file_type FROM premium_games WHERE id = ?', (game_id,))
+                table_name = "premium_games"
+            
+            game_info = cursor.fetchone()
+            
+            if not game_info:
+                self.answer_callback_query(message_id, "❌ Game not found.", True)
+                return False
+            
+            file_name, file_size, file_type = game_info
+            size = self.format_file_size(file_size)
+            game_type_text = "Regular" if game_type == 'R' else "Premium"
+            
+            confirm_text = f"""⚠️ <b>Confirm Game Removal</b>
+
+📁 <b>File:</b> <code>{file_name}</code>
+📦 <b>Type:</b> {file_type}
+📏 <b>Size:</b> {size}
+🎮 <b>Game Type:</b> {game_type_text}
+🆔 <b>ID:</b> {game_id}
+
+❌ <b>This action cannot be undone!</b>
+
+Are you sure you want to remove this game?"""
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Yes, Remove Game", "callback_data": f"remove_{game_type}_{game_id}"},
+                        {"text": "❌ Cancel", "callback_data": "cancel_remove"}
+                    ]
+                ]
+            }
+            
+            self.edit_message(chat_id, message_id, confirm_text, keyboard)
+            return True
+            
+        except Exception as e:
+            print(f"❌ Remove confirmation error: {e}")
+            return False
+
     # ==================== PREMIUM GAMES METHODS ====================
     
     def show_premium_games_menu(self, user_id, chat_id, message_id=None):
         """Show premium games menu to users"""
-        premium_games = self.premium_games_system.get_premium_games(10)
+        premium_games = self.premium_games_system.get_premium_games(20)  # Increased limit
         
         if not premium_games:
             premium_text = """💰 <b>Premium Games</b>
@@ -872,6 +1203,14 @@ class CrossPlatformBot:
 No premium games available yet.
 
 Check back later for exclusive games that you can purchase with Telegram Stars!"""
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🆓 Regular Games", "callback_data": "game_files"}],
+                    [{"text": "🔄 Refresh", "callback_data": "premium_games"}],
+                    [{"text": "🔙 Back to Games", "callback_data": "games"}]
+                ]
+            }
         else:
             premium_text = """💰 <b>Premium Games</b>
 
@@ -879,7 +1218,7 @@ Exclusive games available for purchase with Telegram Stars:
 
 """
             for i, game in enumerate(premium_games, 1):
-                game_id, file_name, file_type, file_size, stars_price, description, upload_date = game
+                game_id, file_name, file_type, file_size, stars_price, description, upload_date, file_id, bot_message_id, is_uploaded = game
                 size = self.format_file_size(file_size)
                 
                 # Shorten filename if too long
@@ -890,19 +1229,32 @@ Exclusive games available for purchase with Telegram Stars:
                 premium_text += f"\n{i}. <b>{display_name}</b>"
                 premium_text += f"\n   ⭐ {stars_price} Stars | 📦 {file_type} | 📏 {size}"
                 if description:
-                    premium_text += f"\n   📝 {description}\n"
-                else:
-                    premium_text += "\n"
-        
-        premium_text += "\n💡 <i>Click on any game to purchase it with Telegram Stars!</i>"
-        
-        keyboard = {
-            "inline_keyboard": [
+                    premium_text += f"\n   📝 {description[:50]}{'...' if len(description) > 50 else ''}"
+                premium_text += f"\n   └─ <code>/premium_{game_id}</code>\n"
+            
+            premium_text += "\n💡 <i>Click on any game to view details and purchase!</i>"
+            
+            # Create buttons for premium games (show first 5 with pagination)
+            keyboard_buttons = []
+            for i, game in enumerate(premium_games[:5], 1):
+                game_id, file_name, file_type, file_size, stars_price, description, upload_date, file_id, bot_message_id, is_uploaded = game
+                display_name = file_name
+                if len(display_name) > 20:
+                    display_name = display_name[:17] + "..."
+                
+                keyboard_buttons.append([{
+                    "text": f"💰 {i}. {display_name}",
+                    "callback_data": f"premium_details_{game_id}"
+                }])
+            
+            # Add navigation and other buttons
+            keyboard_buttons.extend([
                 [{"text": "🆓 Regular Games", "callback_data": "game_files"}],
-                [{"text": "💰 Premium Games", "callback_data": "premium_games"}],
+                [{"text": "🔄 Refresh", "callback_data": "premium_games"}],
                 [{"text": "🔙 Back to Games", "callback_data": "games"}]
-            ]
-        }
+            ])
+            
+            keyboard = {"inline_keyboard": keyboard_buttons}
         
         if message_id:
             self.edit_message(chat_id, message_id, premium_text, keyboard)
@@ -1129,7 +1481,40 @@ Choose the type of game to upload:
             file_name = doc.get('file_name', 'Unknown File')
             file_size = doc.get('file_size', 0)
             file_id = doc.get('file_id', '')
+            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
             bot_message_id = message['message_id']
+            
+            # Check for duplicates
+            regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
+            
+            if regular_duplicate or premium_duplicate:
+                duplicate_text = f"""⚠️ <b>Duplicate Premium Game Detected!</b>
+
+📁 File: <code>{file_name}</code>
+📏 Size: {self.format_file_size(file_size)}
+📦 Type: {file_type}
+
+This game already exists in the database:"""
+                
+                if regular_duplicate:
+                    dup_msg_id, dup_file_name = regular_duplicate
+                    duplicate_text += f"\n\n🆓 <b>Regular Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Message ID: {dup_msg_id}"
+                
+                if premium_duplicate:
+                    dup_id, dup_file_name = premium_duplicate
+                    duplicate_text += f"\n\n💰 <b>Premium Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Game ID: {dup_id}"
+                
+                duplicate_text += "\n\n❌ Upload cancelled. Please upload a different file."
+                
+                # Clean up session
+                del self.upload_sessions[user_id]
+                
+                self.robust_send_message(chat_id, duplicate_text)
+                return True
             
             session = self.upload_sessions[user_id]
             
@@ -1139,7 +1524,7 @@ Choose the type of game to upload:
             game_info = {
                 'message_id': int(time.time() * 1000) + random.randint(1000, 9999),
                 'file_name': file_name,
-                'file_type': file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN',
+                'file_type': file_type,
                 'file_size': file_size,
                 'upload_date': upload_date,
                 'category': self.determine_file_category(file_name),
@@ -2643,9 +3028,39 @@ Always available!
             file_name = doc.get('file_name', 'Unknown File')
             file_size = doc.get('file_size', 0)
             file_id = doc.get('file_id', '')
+            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
             bot_message_id = message['message_id']
             
             print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
+            
+            # Check for duplicates
+            regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
+            
+            if regular_duplicate or premium_duplicate:
+                duplicate_text = f"""⚠️ <b>Duplicate Game Detected!</b>
+
+📁 File: <code>{file_name}</code>
+📏 Size: {self.format_file_size(file_size)}
+📦 Type: {file_type}
+
+This game already exists in the database:"""
+                
+                if regular_duplicate:
+                    dup_msg_id, dup_file_name = regular_duplicate
+                    duplicate_text += f"\n\n🆓 <b>Regular Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Message ID: {dup_msg_id}"
+                
+                if premium_duplicate:
+                    dup_id, dup_file_name = premium_duplicate
+                    duplicate_text += f"\n\n💰 <b>Premium Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Game ID: {dup_id}"
+                
+                duplicate_text += "\n\n❌ Upload cancelled. Please upload a different file."
+                
+                self.robust_send_message(chat_id, duplicate_text)
+                return True
             
             # Check if it's a supported game file
             game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
@@ -2654,7 +3069,6 @@ Always available!
                 print(f"❌ Unsupported file type: {file_name}")
                 return False
             
-            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
             upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
             # Determine if this is a forwarded file
@@ -3841,7 +4255,11 @@ The file is now available in the games browser and search!"""
                 ],
                 [
                     {"text": "📤 Upload Games", "callback_data": "upload_options"},
-                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"}
+                    {"text": "🗑️ Remove Games", "callback_data": "remove_games"}
+                ],
+                [
+                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"},
+                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
                 ],
                 [
                     {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
@@ -3849,10 +4267,9 @@ The file is now available in the games browser and search!"""
                 ],
                 [
                     {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
+                    {"text": "📊 Profile", "callback_data": "profile"}
                 ],
                 [
-                    {"text": "📊 Profile", "callback_data": "profile"},
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
                 ]
             ]
@@ -4078,6 +4495,74 @@ Use this ID for admin verification if needed."""
             
             self.answer_callback_query(callback_query['id'])
             
+            # Game Removal System Callbacks
+            if data == "remove_games":
+                self.show_remove_game_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data == "search_remove_game":
+                self.start_remove_game_search(user_id, chat_id)
+                return
+                
+            elif data.startswith("confirm_remove_"):
+                parts = data.replace("confirm_remove_", "").split("_")
+                if len(parts) >= 2:
+                    game_type = parts[0]  # R or P
+                    game_id = parts[1]    # game ID
+                    self.show_remove_confirmation(user_id, chat_id, message_id, game_type, game_id)
+                return
+
+            elif data.startswith("remove_"):
+                parts = data.replace("remove_", "").split("_")
+                if len(parts) >= 2:
+                    game_type = parts[0]  # R or P
+                    game_id = parts[1]    # game ID
+                    self.remove_game(user_id, chat_id, game_type, game_id, message_id)
+                return
+
+            elif data == "cancel_remove":
+                self.show_remove_game_menu(user_id, chat_id, message_id)
+                return
+
+            elif data == "view_recent_uploads":
+                # Show recent uploads for removal
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT message_id, file_name, file_type, file_size, upload_date, is_uploaded 
+                    FROM channel_games 
+                    WHERE is_uploaded = 1 
+                    ORDER BY created_at DESC 
+                    LIMIT 10
+                ''')
+                recent_uploads = cursor.fetchall()
+                
+                if not recent_uploads:
+                    self.edit_message(chat_id, message_id, "❌ No recent uploads found.", self.create_admin_buttons())
+                    return
+                
+                uploads_text = "📋 <b>Recent Admin Uploads</b>\n\n"
+                uploads_text += "Click 'Remove' to delete any game:\n\n"
+                
+                keyboard_buttons = []
+                for upload in recent_uploads:
+                    msg_id, file_name, file_type, file_size, upload_date, is_uploaded = upload
+                    size = self.format_file_size(file_size)
+                    
+                    uploads_text += f"📁 <b>{file_name}</b>\n"
+                    uploads_text += f"📦 {file_type} | 📏 {size} | 📅 {upload_date[:10]}\n"
+                    uploads_text += f"🆔 {msg_id}\n\n"
+                    
+                    keyboard_buttons.append([{
+                        "text": f"🗑️ Remove {file_name[:20]}{'...' if len(file_name) > 20 else ''}",
+                        "callback_data": f"confirm_remove_R_{msg_id}"
+                    }])
+                
+                keyboard_buttons.append([{"text": "🔙 Back", "callback_data": "remove_games"}])
+                keyboard = {"inline_keyboard": keyboard_buttons}
+                
+                self.edit_message(chat_id, message_id, uploads_text, keyboard)
+                return
+
             # Premium games callbacks
             if data == "premium_games":
                 self.show_premium_games_menu(user_id, chat_id, message_id)
@@ -4528,6 +5013,8 @@ Have fun! 🎉"""
 • 🎮 Game Request System
 • 📝 Individual Request Replies
 • 🖼️ Photo Broadcast Support
+• 🗑️ Game Removal System
+• 🛡️ Duplicate Detection
 • 🔋 Keep-Alive Protection
 
 Choose an option below:"""
@@ -4574,6 +5061,7 @@ Choose an option below:"""
 • 🔄 Process forwarded files  
 • 📊 View upload statistics
 • 🗃️ Update games cache
+• 🗑️ Remove individual games
 • 🗑️ Clear all games
 • 🔍 Scan bot-uploaded games
 • 📢 Broadcast messages to users
@@ -4785,6 +5273,10 @@ After joining, click the button below:"""
                     except ValueError:
                         pass
                 
+                # Handle game removal search
+                if user_id in self.search_sessions and self.search_sessions[user_id].get('mode') == 'remove':
+                    return self.handle_remove_game_search(message)
+                
                 # Handle premium upload process FIRST (highest priority)
                 if user_id in self.upload_sessions:
                     session = self.upload_sessions[user_id]
@@ -4885,6 +5377,9 @@ Have fun! 🎉"""
                         return self.start_broadcast(user_id, chat_id)
                     elif text == '/cleargames' and self.is_admin(user_id):
                         self.clear_all_games(user_id, chat_id, message['message_id'])
+                        return True
+                    elif text == '/removegames' and self.is_admin(user_id):
+                        self.show_remove_game_menu(user_id, chat_id, message['message_id'])
                         return True
                     elif text == '/upload' and self.is_admin(user_id):
                         self.show_upload_options(user_id, chat_id, message['message_id'])
@@ -4988,6 +5483,7 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
         print("💰 Premium games: /premium")
         print("⭐ Stars donations: /stars")
         print("📝 Game requests: /request")
+        print("🗑️ Game removal: /removegames (Admin only)")
         print("👑 Admin commands: /scan, /cleargames, /upload, /broadcast, /starsstats, /keepalive, /requests")
         print("🛡️  Crash protection enabled")
         print("🔋 Keep-alive system active")
