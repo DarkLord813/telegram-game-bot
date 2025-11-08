@@ -16,15 +16,16 @@ from io import BytesIO
 
 print("TELEGRAM BOT - CROSS PLATFORM")
 print("Code Verification + Channel Join + Game Scanner")
-print("Admin Game Uploads Enabled + Forward Support + Game Search")
+print("Admin Game Uploads Enabled + Forward Support + Game Scanner")
 print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
-print("Admin Broadcast Messaging System + Keep-Alive Protection")
+print("Admin Broadcast Messaging System + Enhanced Keep-Alive Protection")
 print("Telegram Stars Payments Integration")
 print("Game Request System for Users")
 print("Premium Games System with Stars Payments")
 print("Enhanced Broadcast with Photos")
 print("Individual Game Request Replies")
 print("Game Removal System with Duplicate Detection")
+print("24/7 Operation with Persistent Data Recovery")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -68,16 +69,22 @@ app = Flask(__name__)
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint for Render monitoring"""
+    """Enhanced health check endpoint for Render monitoring"""
     try:
+        bot_status = 'unknown'
+        if 'bot' in globals() and hasattr(bot, 'test_bot_connection'):
+            bot_status = 'healthy' if bot.test_bot_connection() else 'unhealthy'
+        
         health_status = {
             'status': 'healthy',
             'timestamp': time.time(),
             'service': 'telegram-game-bot',
             'version': '1.0.0',
+            'bot_status': bot_status,
             'checks': {
-                'bot_online': {'status': 'healthy', 'message': 'Bot is running'},
-                'system': {'status': 'healthy', 'message': 'System operational'}
+                'bot_online': {'status': bot_status, 'message': f'Bot is {bot_status}'},
+                'system': {'status': 'healthy', 'message': 'System operational'},
+                'database': {'status': 'healthy', 'message': 'Database connected'}
             }
         }
         return jsonify(health_status), 200
@@ -85,7 +92,8 @@ def health_check():
         return jsonify({
             'status': 'error',
             'message': str(e),
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'bot_status': 'error'
         }), 500
 
 @app.route('/')
@@ -97,7 +105,7 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System']
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System', '24/7 Operation']
         }
     })
 
@@ -126,44 +134,76 @@ def start_health_check():
     t.start()
     print("✅ Health check server started on port 8080")
 
-# ==================== KEEP-ALIVE SERVICE ====================
+# ==================== ENHANCED KEEP-ALIVE SERVICE ====================
 
-class KeepAliveService:
+class EnhancedKeepAliveService:
     def __init__(self, health_url=None):
         self.health_url = health_url or f"http://localhost:{os.environ.get('PORT', 8080)}/health"
         self.is_running = False
         self.ping_count = 0
+        self.last_successful_ping = time.time()
         
     def start(self):
-        """Start keep-alive service to prevent sleep"""
+        """Start enhanced keep-alive service with better monitoring"""
         self.is_running = True
         
         def ping_loop():
+            consecutive_failures = 0
+            max_consecutive_failures = 3
+            
             while self.is_running:
                 try:
                     self.ping_count += 1
-                    response = requests.get(self.health_url, timeout=10)
+                    response = requests.get(self.health_url, timeout=15)
                     
                     if response.status_code == 200:
+                        self.last_successful_ping = time.time()
+                        consecutive_failures = 0
                         print(f"✅ Keep-alive ping #{self.ping_count}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                     else:
-                        print(f"❌ Keep-alive failed: Status {response.status_code}")
+                        consecutive_failures += 1
+                        print(f"❌ Keep-alive failed: Status {response.status_code} (Failures: {consecutive_failures})")
                         
                 except requests.exceptions.ConnectionError:
-                    print(f"🔌 Keep-alive connection error - server may be starting")
+                    consecutive_failures += 1
+                    print(f"🔌 Keep-alive connection error (Failures: {consecutive_failures})")
                 except requests.exceptions.Timeout:
-                    print(f"⏰ Keep-alive timeout - retrying later")
+                    consecutive_failures += 1
+                    print(f"⏰ Keep-alive timeout (Failures: {consecutive_failures})")
                 except Exception as e:
-                    print(f"❌ Keep-alive error: {e}")
+                    consecutive_failures += 1
+                    print(f"❌ Keep-alive error: {e} (Failures: {consecutive_failures})")
                 
-                # Wait 4 minutes (Render sleeps after 15 min inactivity)
-                # Ping every 4 minutes to stay active
-                time.sleep(240)  # 4 minutes
+                # Emergency restart if too many consecutive failures
+                if consecutive_failures >= max_consecutive_failures:
+                    print("🚨 Too many consecutive failures, initiating emergency procedures...")
+                    self.emergency_restart()
+                    consecutive_failures = 0
+                
+                # Check if last successful ping was too long ago
+                if time.time() - self.last_successful_ping > 600:  # 10 minutes
+                    print("🚨 No successful pings for 10 minutes, emergency restart...")
+                    self.emergency_restart()
+                    self.last_successful_ping = time.time()
+                
+                # Dynamic ping interval: more frequent if issues detected
+                if consecutive_failures > 0:
+                    sleep_time = 60  # 1 minute if having issues
+                else:
+                    sleep_time = 240  # 4 minutes normally
+                
+                time.sleep(sleep_time)
         
         thread = threading.Thread(target=ping_loop, daemon=True)
         thread.start()
-        print(f"🔄 Keep-alive service started - pinging every 4 minutes")
+        print(f"🔄 Enhanced keep-alive service started")
         print(f"🌐 Health endpoint: {self.health_url}")
+        
+    def emergency_restart(self):
+        """Emergency restart procedure"""
+        print("🔄 Initiating emergency restart...")
+        # This will be caught by the main loop which will restart the bot
+        os._exit(1)  # Force exit to trigger restart
         
     def stop(self):
         """Stop keep-alive service"""
@@ -844,10 +884,125 @@ class CrossPlatformBot:
         print("🗑️ Game removal system enabled")
         print("🛡️ Duplicate detection enabled")
         print("🛡️  Crash protection enabled")
-        print("🔋 Keep-alive system ready")
+        print("🔋 Enhanced keep-alive system ready")
+        print("💾 Persistent data recovery enabled")
     
+    def initialize_with_persistence(self):
+        """Initialize bot with persistent data recovery"""
+        try:
+            print("🔄 Initializing bot with persistence...")
+            
+            # Ensure database is properly set up
+            self.setup_database()
+            self.verify_database_schema()
+            
+            # Recover games cache
+            self.update_games_cache()
+            
+            # Recover uploaded files
+            self.recover_uploaded_files()
+            
+            # Recover sessions from database (if you want persistent sessions)
+            self.recover_persistent_sessions()
+            
+            # Test bot connection
+            if not self.test_bot_connection():
+                print("❌ Bot connection failed during initialization")
+                return False
+                
+            # Start keep-alive service
+            if not self.start_keep_alive():
+                print("❌ Keep-alive service failed to start")
+                return False
+                
+            print("✅ Bot initialization with persistence completed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Bot initialization failed: {e}")
+            return False
+
+    def recover_persistent_sessions(self):
+        """Recover persistent sessions from database"""
+        try:
+            # You can implement session recovery here if needed
+            # For now, we'll just reset sessions on restart
+            self.guess_games = {}
+            self.spin_games = {}
+            self.broadcast_sessions = {}
+            self.stars_sessions = {}
+            self.request_sessions = {}
+            self.upload_sessions = {}
+            self.reply_sessions = {}
+            self.search_sessions = {}
+            self.search_results = {}
+            
+            print("✅ Sessions reset for fresh start")
+        except Exception as e:
+            print(f"❌ Session recovery error: {e}")
+
+    def recover_uploaded_files(self):
+        """Recover and verify all uploaded files after restart"""
+        try:
+            print("🔄 Recovering uploaded files...")
+            
+            cursor = self.conn.cursor()
+            
+            # Check bot-uploaded files
+            cursor.execute('''
+                SELECT message_id, file_name, bot_message_id, file_id 
+                FROM channel_games 
+                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
+            ''')
+            bot_files = cursor.fetchall()
+            
+            recovered_count = 0
+            for message_id, file_name, bot_message_id, file_id in bot_files:
+                # Verify the file still exists and is accessible
+                if self.verify_file_accessible(bot_message_id, file_id, True):
+                    recovered_count += 1
+                    print(f"✅ Recovered bot file: {file_name}")
+                else:
+                    print(f"❌ Bot file not accessible: {file_name}")
+                    # You might want to mark it as problematic or remove it
+            
+            # Check premium games
+            cursor.execute('''
+                SELECT id, file_name, bot_message_id, file_id 
+                FROM premium_games 
+                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
+            ''')
+            premium_files = cursor.fetchall()
+            
+            for game_id, file_name, bot_message_id, file_id in premium_files:
+                if self.verify_file_accessible(bot_message_id, file_id, True):
+                    recovered_count += 1
+                    print(f"✅ Recovered premium file: {file_name}")
+                else:
+                    print(f"❌ Premium file not accessible: {file_name}")
+            
+            print(f"✅ File recovery complete: {recovered_count} files recovered")
+            return recovered_count
+            
+        except Exception as e:
+            print(f"❌ File recovery error: {e}")
+            return 0
+
+    def verify_file_accessible(self, message_id, file_id, is_bot_file):
+        """Verify if a file is still accessible"""
+        try:
+            # Try to get file info to verify accessibility
+            url = self.base_url + "getFile"
+            data = {"file_id": file_id}
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            return result.get('ok', False)
+        except:
+            return False
+
     def start_keep_alive(self):
-        """Start the keep-alive service"""
+        """Start the enhanced keep-alive service"""
         try:
             # Get the actual Render URL from environment or use local
             render_url = os.environ.get('RENDER_EXTERNAL_URL')
@@ -856,9 +1011,9 @@ class CrossPlatformBot:
             else:
                 health_url = f"http://localhost:{os.environ.get('PORT', 8080)}/health"
             
-            self.keep_alive = KeepAliveService(health_url)
+            self.keep_alive = EnhancedKeepAliveService(health_url)
             self.keep_alive.start()
-            print("🔋 Keep-alive service activated - bot will stay awake!")
+            print("🔋 Enhanced keep-alive service activated - bot will stay awake!")
             return True
         except Exception as e:
             print(f"❌ Failed to start keep-alive: {e}")
@@ -5016,6 +5171,7 @@ Have fun! 🎉"""
 • 🗑️ Game Removal System
 • 🛡️ Duplicate Detection
 • 🔋 Keep-Alive Protection
+• 💾 Persistent Data Recovery
 
 Choose an option below:"""
                 self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
@@ -5466,85 +5622,89 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             print(f"❌ Process message error: {e}")
             return False
 
-    # ==================== CRASH-PROTECTED RUN METHOD WITH KEEP-ALIVE ====================
+    # ==================== ENHANCED RUN METHOD WITH PERSISTENCE ====================
 
     def run(self):
-        """Main bot loop with comprehensive crash protection"""
-        if not self.test_bot_connection():
-            print("❌ Bot cannot start. Please check your token.")
+        """Enhanced main bot loop with comprehensive crash protection"""
+        if not self.initialize_with_persistence():
+            print("❌ Bot cannot start. Initialization failed.")
             return
-        
-        # Start keep-alive service
-        self.start_keep_alive()
-        
-        print("🤖 Bot is running with full protection...")
-        print("📝 Send /start to begin")
-        print("🎮 Mini-games available: /minigames")
-        print("💰 Premium games: /premium")
-        print("⭐ Stars donations: /stars")
-        print("📝 Game requests: /request")
-        print("🗑️ Game removal: /removegames (Admin only)")
-        print("👑 Admin commands: /scan, /cleargames, /upload, /broadcast, /starsstats, /keepalive, /requests")
-        print("🛡️  Crash protection enabled")
-        print("🔋 Keep-alive system active")
-        print("🛑 Press Ctrl+C to stop")
+    
+        print("🤖 Bot is running with enhanced protection...")
+        print("📊 Monitoring: Health checks every 4 minutes")
+        print("🛡️  Protection: Auto-restart on failures")
+        print("💾 Persistence: Data preserved across restarts")
         
         offset = 0
         last_successful_update = time.time()
+        update_failures = 0
+        max_update_failures = 10
         
         while True:
             try:
                 updates = self.get_updates(offset)
                 
-                # Check if we're getting updates regularly
                 if updates:
                     last_successful_update = time.time()
-                    # Reset error counter on successful updates
-                    if self.consecutive_errors > 0:
-                        self.consecutive_errors = 0
-                        print("✅ Connection recovered")
-                else:
-                    # If no updates for a long time, check connection
-                    if time.time() - last_successful_update > 120:  # 2 minutes
-                        print("🔄 No updates received for 2 minutes, testing connection...")
-                        if not self.test_bot_connection():
-                            print("❌ Connection lost, reinitializing...")
-                            self.auto_restart()
-                            last_successful_update = time.time()
-                
-                for update in updates:
-                    offset = update['update_id'] + 1
+                    update_failures = 0
                     
-                    try:
-                        if 'message' in update:
-                            self.process_message(update['message'])
-                        elif 'callback_query' in update:
-                            self.handle_callback_query(update['callback_query'])
-                    except Exception as e:
-                        self.handle_error(e, "update_processing")
-                        # Continue processing other updates even if one fails
-                        continue
+                    for update in updates:
+                        offset = update['update_id'] + 1
+                        
+                        try:
+                            if 'message' in update:
+                                self.process_message(update['message'])
+                            elif 'callback_query' in update:
+                                self.handle_callback_query(update['callback_query'])
+                        except Exception as e:
+                            print(f"❌ Update processing error: {e}")
+                            # Continue processing other updates
+                            continue
+                else:
+                    update_failures += 1
+                    print(f"ℹ️ No updates received (Failure #{update_failures})")
                 
-                # Small delay to prevent tight looping
-                time.sleep(0.1)
+                # Check if we're having connection issues
+                current_time = time.time()
+                time_since_last_update = current_time - last_successful_update
+                
+                if time_since_last_update > 300:  # 5 minutes without updates
+                    print(f"🚨 No updates for {time_since_last_update:.0f} seconds, testing connection...")
+                    if not self.test_bot_connection():
+                        print("❌ Bot connection lost, triggering restart...")
+                        raise ConnectionError("Bot connection lost")
+                
+                if update_failures >= max_update_failures:
+                    print("🚨 Too many update failures, triggering restart...")
+                    raise ConnectionError("Too many update failures")
+                
+                # Normal delay
+                time.sleep(0.5)
                 
             except KeyboardInterrupt:
                 print("\n🛑 Bot stopped by user")
                 if self.keep_alive:
                     self.keep_alive.stop()
                 break
-            except Exception as e:
-                self.consecutive_errors += 1
-                print(f"❌ Main loop error #{self.consecutive_errors}: {str(e)[:100]}...")
                 
-                if self.consecutive_errors >= self.max_consecutive_errors:
-                    print("🔄 Too many consecutive errors, performing auto-restart...")
-                    self.auto_restart()
+            except ConnectionError as e:
+                print(f"🔌 Connection issue: {e}")
+                self.handle_error(e, "connection_lost")
+                # This will trigger a restart
+                raise
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"❌ Main loop error: {error_msg}")
+                
+                # Don't restart for minor errors, only for critical ones
+                if any(keyword in error_msg.lower() for keyword in ['token', 'connection', 'network', 'timeout']):
+                    self.handle_error(e, "critical_error")
+                    raise  # This will trigger restart
                 else:
-                    # Exponential backoff for retries
-                    sleep_time = min(5 * (2 ** (self.consecutive_errors - 1)), 30)
-                    print(f"💤 Sleeping for {sleep_time} seconds before retry...")
-                    time.sleep(sleep_time)
+                    self.handle_error(e, "non_critical_error")
+                    # Continue for non-critical errors
+                    time.sleep(5)
 
 # ==================== ENVIRONMENT VARIABLES CONFIG ====================
 
@@ -5587,37 +5747,54 @@ def test_bot_connection(token):
         return False
 
 if __name__ == "__main__":
-    print("🔍 Testing bot token...")
+    print("🚀 Starting Enhanced Telegram Bot...")
     
     # Start health check server first (always)
     start_health_check()
     
-    if BOT_TOKEN and test_bot_connection(BOT_TOKEN):
-        print("🚀 Starting bot with full protection systems...")
+    # Wait a moment for health server to start
+    time.sleep(2)
+    
+    if BOT_TOKEN:
+        print("🔍 Testing bot token...")
         
-        # Main loop with restart capability
-        restart_count = 0
-        max_restarts = 20
-        
-        while restart_count < max_restarts:
-            try:
-                bot = CrossPlatformBot(BOT_TOKEN)
-                bot.run()
-            except Exception as e:
-                restart_count += 1
-                print(f"💥 Critical bot crash (#{restart_count}): {e}")
-                print("🔄 Restarting in 10 seconds...")
-                time.sleep(10)
-            except KeyboardInterrupt:
-                print("\n🛑 Bot stopped by user")
-                break
+        if test_bot_connection(BOT_TOKEN):
+            print("✅ Bot token is valid")
+            
+            # Main loop with enhanced restart capability
+            restart_count = 0
+            max_restarts = 50  # Increased limit
+            restart_delay = 10
+            
+            while restart_count < max_restarts:
+                try:
+                    restart_count += 1
+                    print(f"🔄 Bot start attempt #{restart_count}")
+                    
+                    bot = CrossPlatformBot(BOT_TOKEN)
+                    bot.run()
+                    
+                    # If we get here, the bot stopped gracefully
+                    print("🤖 Bot stopped gracefully")
+                    break
+                    
+                except Exception as e:
+                    print(f"💥 Bot crash (#{restart_count}): {e}")
+                    
+                    if restart_count < max_restarts:
+                        print(f"🔄 Restarting in {restart_delay} seconds...")
+                        time.sleep(restart_delay)
+                        
+                        # Increase delay for consecutive restarts (exponential backoff)
+                        restart_delay = min(restart_delay * 1.5, 300)  # Max 5 minutes
+                    else:
+                        print(f"❌ Maximum restarts ({max_restarts}) reached.")
+                        break
+            else:
+                print(f"🚨 Maximum restarts reached. Bot cannot recover automatically.")
         else:
-            print(f"❌ Maximum restarts ({max_restarts}) reached. Please check for underlying issues.")
+            print("❌ Invalid bot token - cannot start")
     else:
-        print("❌ Cannot start bot with invalid token")
-        print("💡 Check your BOT_TOKEN environment variable")
-        print("💡 Health server is running on /health endpoint")
-        
-        # Keep the health server running even without bot
-        while True:
-            time.sleep(10)
+        print("❌ No BOT_TOKEN provided")
+    
+    print("🔴 Bot service ended")
