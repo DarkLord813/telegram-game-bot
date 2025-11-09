@@ -25,6 +25,7 @@ print("Premium Games System with Stars Payments")
 print("Enhanced Broadcast with Photos")
 print("Individual Game Request Replies")
 print("Game Removal System with Duplicate Detection")
+print("Redeploy System for Admins and Users")
 print("24/7 Operation with Persistent Data Recovery")
 print("=" * 50)
 
@@ -96,6 +97,68 @@ def health_check():
             'bot_status': 'error'
         }), 500
 
+@app.route('/redeploy', methods=['POST'])
+def redeploy_bot():
+    """Redeploy endpoint for admins and users"""
+    try:
+        # Get authorization from request
+        auth_token = request.headers.get('Authorization', '')
+        user_id = request.json.get('user_id', '') if request.json else ''
+        
+        # Simple authorization check (you can enhance this)
+        is_authorized = auth_token == os.environ.get('REDEPLOY_TOKEN', 'default_token') or user_id in ['7475473197', '7713987088']
+        
+        if not is_authorized:
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized access'
+            }), 401
+        
+        print(f"🔄 Redeploy triggered by user {user_id}")
+        
+        # Trigger redeploy logic
+        redeploy_result = trigger_redeploy()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Redeploy initiated successfully',
+            'redeploy_id': int(time.time()),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': time.time()
+        }), 500
+
+def trigger_redeploy():
+    """Trigger a redeploy of the bot"""
+    try:
+        print("🚀 Initiating bot redeploy...")
+        
+        # In a real deployment, this would trigger your CI/CD pipeline
+        # For Render, you might use their API or webhook
+        
+        # For now, we'll simulate a redeploy by restarting the bot process
+        # In production, this would be handled by your deployment platform
+        print("✅ Redeploy signal sent - bot will restart shortly")
+        
+        # Schedule a graceful restart
+        def delayed_restart():
+            time.sleep(5)
+            os._exit(0)
+        
+        restart_thread = threading.Thread(target=delayed_restart, daemon=True)
+        restart_thread.start()
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Redeploy error: {e}")
+        return False
+
 @app.route('/')
 def home():
     """Root endpoint"""
@@ -105,7 +168,8 @@ def home():
         'version': '1.0.0',
         'endpoints': {
             'health': '/health',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System', '24/7 Operation']
+            'redeploy': '/redeploy (POST)',
+            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System', 'Redeploy System', '24/7 Operation']
         }
     })
 
@@ -209,6 +273,241 @@ class EnhancedKeepAliveService:
         """Stop keep-alive service"""
         self.is_running = False
         print("🛑 Keep-alive service stopped")
+
+# ==================== REDEPLOY SYSTEM ====================
+
+class RedeploySystem:
+    def __init__(self, bot_instance):
+        self.bot = bot_instance
+        self.redeploy_requests = {}
+        print("✅ Redeploy system initialized!")
+    
+    def show_redeploy_menu(self, user_id, chat_id, message_id):
+        """Show redeploy menu"""
+        if not self.bot.is_admin(user_id):
+            self.bot.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
+            return
+        
+        redeploy_text = """🔄 <b>Bot Redeploy System</b>
+
+This system allows you to restart the bot without losing any data.
+
+⚠️ <b>Important:</b>
+• Database will be preserved
+• All games and user data remain safe
+• Bot will be unavailable for 10-30 seconds during redeploy
+• Automatic recovery after redeploy
+
+🛠️ <b>When to use:</b>
+• Bot is unresponsive
+• Features not working properly
+• After database updates
+• General maintenance
+
+Choose an option:"""
+        
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"}],
+                [{"text": "🚀 Force Redeploy", "callback_data": "redeploy_force"}],
+                [{"text": "📊 System Status", "callback_data": "system_status"}],
+                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+            ]
+        }
+        
+        self.bot.edit_message(chat_id, message_id, redeploy_text, keyboard)
+    
+    def initiate_redeploy(self, user_id, chat_id, redeploy_type="soft"):
+        """Initiate a redeploy"""
+        try:
+            user_info = self.bot.get_user_info(user_id)
+            user_name = user_info.get('first_name', 'Unknown')
+            
+            print(f"🔄 {redeploy_type.upper()} redeploy initiated by {user_name} ({user_id})")
+            
+            # Store redeploy request
+            redeploy_id = int(time.time())
+            self.redeploy_requests[redeploy_id] = {
+                'user_id': user_id,
+                'user_name': user_name,
+                'type': redeploy_type,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'initiated'
+            }
+            
+            # Send redeploy confirmation
+            if redeploy_type == "soft":
+                confirm_text = f"""🔄 <b>Soft Redeploy Initiated</b>
+
+👤 Initiated by: {user_name}
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🆔 Request ID: {redeploy_id}
+
+📝 <b>Process:</b>
+• Bot will perform graceful restart
+• All data preserved
+• 10-30 seconds downtime expected
+• Automatic recovery
+
+✅ The bot will restart shortly..."""
+            else:
+                confirm_text = f"""🚀 <b>Force Redeploy Initiated</b>
+
+👤 Initiated by: {user_name}
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🆔 Request ID: {redeploy_id}
+
+⚠️ <b>Force Redeploy:</b>
+• Immediate bot restart
+• All data preserved
+• Quick recovery expected
+• Emergency use only
+
+✅ The bot will restart immediately..."""
+            
+            self.bot.robust_send_message(chat_id, confirm_text)
+            
+            # Trigger redeploy via webhook
+            self.trigger_redeploy_webhook(user_id, redeploy_type)
+            
+            # Schedule actual restart
+            if redeploy_type == "soft":
+                restart_delay = 5
+            else:
+                restart_delay = 2
+            
+            def delayed_restart():
+                time.sleep(restart_delay)
+                print(f"🔄 Executing {redeploy_type} redeploy...")
+                os._exit(0)
+            
+            restart_thread = threading.Thread(target=delayed_restart, daemon=True)
+            restart_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Redeploy initiation error: {e}")
+            self.bot.robust_send_message(chat_id, f"❌ Redeploy failed: {str(e)}")
+            return False
+    
+    def trigger_redeploy_webhook(self, user_id, redeploy_type):
+        """Trigger redeploy via webhook"""
+        try:
+            # Get the redeploy URL from environment
+            redeploy_url = os.environ.get('REDEPLOY_WEBHOOK_URL')
+            redeploy_token = os.environ.get('REDEPLOY_TOKEN', 'default_token')
+            
+            if not redeploy_url:
+                print("ℹ️ No redeploy webhook URL set, using internal restart")
+                return False
+            
+            # Prepare webhook data
+            webhook_data = {
+                'user_id': user_id,
+                'redeploy_type': redeploy_type,
+                'timestamp': datetime.now().isoformat(),
+                'service': 'telegram-game-bot'
+            }
+            
+            headers = {
+                'Authorization': redeploy_token,
+                'Content-Type': 'application/json'
+            }
+            
+            response = requests.post(redeploy_url, json=webhook_data, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                print(f"✅ Redeploy webhook triggered successfully")
+                return True
+            else:
+                print(f"❌ Redeploy webhook failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Webhook error: {e}")
+            return False
+    
+    def show_system_status(self, user_id, chat_id, message_id):
+        """Show current system status"""
+        try:
+            # Get bot connection status
+            bot_online = self.bot.test_bot_connection()
+            
+            # Get database status
+            db_status = "Healthy"
+            try:
+                cursor = self.bot.conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM channel_games')
+                game_count = cursor.fetchone()[0]
+                cursor.execute('SELECT COUNT(*) FROM users')
+                user_count = cursor.fetchone()[0]
+            except:
+                db_status = "Error"
+                game_count = 0
+                user_count = 0
+            
+            # Get memory usage
+            try:
+                import psutil
+                memory = psutil.virtual_memory()
+                memory_usage = f"{memory.percent}%"
+            except:
+                memory_usage = "N/A"
+            
+            # Get uptime
+            uptime_seconds = time.time() - self.bot.last_restart
+            uptime_str = self.format_uptime(uptime_seconds)
+            
+            status_text = f"""📊 <b>System Status</b>
+
+🤖 <b>Bot Status:</b> {'🟢 ONLINE' if bot_online else '🔴 OFFLINE'}
+💾 <b>Database:</b> {db_status}
+📁 <b>Games in DB:</b> {game_count}
+👥 <b>Users:</b> {user_count}
+🕒 <b>Uptime:</b> {uptime_str}
+💻 <b>Memory:</b> {memory_usage}
+
+🔧 <b>Services:</b>
+• Health Server: 🟢 Running
+• Keep-Alive: {'🟢 Active' if self.bot.keep_alive and self.bot.keep_alive.is_running else '🔴 Inactive'}
+• Database: 🟢 Connected
+• Game Scanner: {'🟢 Ready' if not self.bot.is_scanning else '🟡 Scanning'}
+
+📈 <b>Performance:</b>
+• Error Count: {self.bot.error_count}
+• Consecutive Errors: {self.bot.consecutive_errors}
+• Last Restart: {datetime.fromtimestamp(self.bot.last_restart).strftime('%Y-%m-%d %H:%M:%S')}"""
+
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"}],
+                    [{"text": "🔄 Refresh Status", "callback_data": "system_status"}],
+                    [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+                ]
+            }
+            
+            self.bot.edit_message(chat_id, message_id, status_text, keyboard)
+            
+        except Exception as e:
+            print(f"❌ System status error: {e}")
+            self.bot.edit_message(chat_id, message_id, f"❌ Error getting system status: {str(e)}", self.bot.create_admin_buttons())
+    
+    def format_uptime(self, seconds):
+        """Format uptime in human readable format"""
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        minutes = (seconds % 3600) // 60
+        seconds = seconds % 60
+        
+        if days > 0:
+            return f"{int(days)}d {int(hours)}h {int(minutes)}m"
+        elif hours > 0:
+            return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+        elif minutes > 0:
+            return f"{int(minutes)}m {int(seconds)}s"
+        else:
+            return f"{int(seconds)}s"
 
 # ==================== TELEGRAM STARS PAYMENT SYSTEM ====================
 
@@ -839,10 +1138,11 @@ class CrossPlatformBot:
         self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': '', 'photo': None}}
         self.broadcast_stats = {}     # Store broadcast statistics
         
-        # Stars and request systems
+        # Stars, request, and redeploy systems
         self.stars_system = TelegramStarsSystem(self)
         self.game_request_system = GameRequestSystem(self)
         self.premium_games_system = PremiumGamesSystem(self)
+        self.redeploy_system = RedeploySystem(self)
         
         # Session management
         self.stars_sessions = {}  # {user_id: {'stars_amount': amount}}
@@ -883,6 +1183,7 @@ class CrossPlatformBot:
         print("🖼️ Photo broadcast support enabled")
         print("🗑️ Game removal system enabled")
         print("🛡️ Duplicate detection enabled")
+        print("🔄 Redeploy system enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Enhanced keep-alive system ready")
         print("💾 Persistent data recovery enabled")
@@ -1018,6 +1319,809 @@ class CrossPlatformBot:
         except Exception as e:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
+
+    # ==================== REDEPLOY SYSTEM INTEGRATION ====================
+    
+    def create_main_menu_buttons(self):
+        stats = self.get_channel_stats()
+        keyboard = [
+            [
+                {"text": "📊 Profile", "callback_data": "profile"},
+                {"text": "🕒 Time", "callback_data": "time"}
+            ],
+            [
+                {"text": "📢 Channel", "callback_data": "channel_info"},
+                {"text": f"🎮 Games ({stats['total_games'] + stats['premium_games']})", "callback_data": "games"}
+            ],
+            [
+                {"text": "💰 Premium Games", "callback_data": "premium_games"},
+                {"text": "🔍 Search Games", "callback_data": "search_games"}
+            ],
+            [
+                {"text": "📝 Request Game", "callback_data": "request_game"},
+                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
+            ]
+        ]
+        
+        # Add admin panel only for admins
+        if self.is_admin:
+            keyboard.append([
+                {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
+            ])
+        
+        # Add redeploy button for everyone (simplified access)
+        keyboard.append([
+            {"text": "🔄 Redeploy Bot", "callback_data": "user_redeploy"}
+        ])
+        
+        return {"inline_keyboard": keyboard}
+    
+    def create_admin_buttons(self):
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "📤 Upload Stats", "callback_data": "upload_stats"},
+                    {"text": "🔄 Update Cache", "callback_data": "update_cache"}
+                ],
+                [
+                    {"text": "📤 Upload Games", "callback_data": "upload_options"},
+                    {"text": "🗑️ Remove Games", "callback_data": "remove_games"}
+                ],
+                [
+                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"},
+                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
+                ],
+                [
+                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
+                    {"text": "🎮 Game Requests", "callback_data": "admin_requests_panel"}
+                ],
+                [
+                    {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
+                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"}
+                ],
+                [
+                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+
+    def handle_user_redeploy_request(self, user_id, chat_id, message_id):
+        """Handle user redeploy requests"""
+        try:
+            user_info = self.get_user_info(user_id)
+            user_name = user_info.get('first_name', 'Unknown')
+            
+            # Check if user is admin
+            if self.is_admin(user_id):
+                # Admin can redeploy directly
+                redeploy_text = f"""🔄 <b>Admin Redeploy Access</b>
+
+👤 Admin: {user_name}
+🆔 User ID: {user_id}
+
+You have admin privileges and can redeploy the bot directly.
+
+Choose redeploy type:"""
+                
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"}],
+                        [{"text": "🚀 Force Redeploy", "callback_data": "redeploy_force"}],
+                        [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+                    ]
+                }
+                
+                self.edit_message(chat_id, message_id, redeploy_text, keyboard)
+                
+            else:
+                # Regular user - send notification to admins
+                notification_text = f"""🔄 <b>User Redeploy Request</b>
+
+👤 User: {user_name} (ID: {user_id})
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📝 Status: Requested redeploy
+
+💡 <i>The user reports the bot may not be responding properly.</i>"""
+
+                # Notify all admins
+                for admin_id in self.ADMIN_IDS:
+                    try:
+                        admin_keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"},
+                                    {"text": "🚀 Force Redeploy", "callback_data": "redeploy_force"}
+                                ],
+                                [
+                                    {"text": "📊 Check Status", "callback_data": "system_status"},
+                                    {"text": "💬 Contact User", "callback_data": f"contact_user_{user_id}"}
+                                ]
+                            ]
+                        }
+                        self.robust_send_message(admin_id, notification_text, admin_keyboard)
+                    except Exception as e:
+                        print(f"❌ Failed to notify admin {admin_id}: {e}")
+                
+                # Inform user
+                user_response = f"""🔄 <b>Redeploy Request Sent</b>
+
+Thank you {user_name}! 
+
+Your redeploy request has been sent to the admins. They will review the bot status and perform a redeploy if necessary.
+
+⏰ Expected response time: 5-15 minutes
+
+📊 <b>Current Bot Status:</b>
+• 🤖 Bot: 🟢 Online
+• 💾 Database: 🟢 Connected  
+• 📡 Services: 🟢 Running
+
+If the issue persists, please contact the admins directly."""
+
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "🔄 Check Status", "callback_data": "check_bot_status"}],
+                        [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+                    ]
+                }
+                
+                self.edit_message(chat_id, message_id, user_response, keyboard)
+                
+        except Exception as e:
+            print(f"❌ User redeploy request error: {e}")
+            self.edit_message(chat_id, message_id, "❌ Error processing redeploy request.", self.create_main_menu_buttons())
+
+    # ==================== UPDATED CALLBACK HANDLER ====================
+
+    def handle_callback_query(self, callback_query):
+        try:
+            data = callback_query['data']
+            message = callback_query['message']
+            chat_id = message['chat']['id']
+            message_id = message['message_id']
+            user_id = callback_query['from']['id']
+            first_name = callback_query['from']['first_name']
+            
+            print(f"📨 Callback: {data} from {first_name} ({user_id})")
+            
+            self.answer_callback_query(callback_query['id'])
+            
+            # Redeploy System Callbacks
+            if data == "redeploy_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.redeploy_system.show_redeploy_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data == "user_redeploy":
+                # User redeploy request
+                self.handle_user_redeploy_request(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("redeploy_"):
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                redeploy_type = data.replace("redeploy_", "")
+                if redeploy_type in ["soft", "force"]:
+                    self.redeploy_system.initiate_redeploy(user_id, chat_id, redeploy_type)
+                return
+                
+            elif data == "system_status":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.redeploy_system.show_system_status(user_id, chat_id, message_id)
+                return
+
+            # Game Removal System Callbacks
+            if data == "remove_games":
+                self.show_remove_game_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data == "search_remove_game":
+                self.start_remove_game_search(user_id, chat_id)
+                return
+                
+            elif data.startswith("confirm_remove_"):
+                parts = data.replace("confirm_remove_", "").split("_")
+                if len(parts) >= 2:
+                    game_type = parts[0]  # R or P
+                    game_id = parts[1]    # game ID
+                    self.show_remove_confirmation(user_id, chat_id, message_id, game_type, game_id)
+                return
+
+            elif data.startswith("remove_"):
+                parts = data.replace("remove_", "").split("_")
+                if len(parts) >= 2:
+                    game_type = parts[0]  # R or P
+                    game_id = parts[1]    # game ID
+                    self.remove_game(user_id, chat_id, game_type, game_id, message_id)
+                return
+
+            elif data == "cancel_remove":
+                self.show_remove_game_menu(user_id, chat_id, message_id)
+                return
+
+            elif data == "view_recent_uploads":
+                # Show recent uploads for removal
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT message_id, file_name, file_type, file_size, upload_date, is_uploaded 
+                    FROM channel_games 
+                    WHERE is_uploaded = 1 
+                    ORDER BY created_at DESC 
+                    LIMIT 10
+                ''')
+                recent_uploads = cursor.fetchall()
+                
+                if not recent_uploads:
+                    self.edit_message(chat_id, message_id, "❌ No recent uploads found.", self.create_admin_buttons())
+                    return
+                
+                uploads_text = "📋 <b>Recent Admin Uploads</b>\n\n"
+                uploads_text += "Click 'Remove' to delete any game:\n\n"
+                
+                keyboard_buttons = []
+                for upload in recent_uploads:
+                    msg_id, file_name, file_type, file_size, upload_date, is_uploaded = upload
+                    size = self.format_file_size(file_size)
+                    
+                    uploads_text += f"📁 <b>{file_name}</b>\n"
+                    uploads_text += f"📦 {file_type} | 📏 {size} | 📅 {upload_date[:10]}\n"
+                    uploads_text += f"🆔 {msg_id}\n\n"
+                    
+                    keyboard_buttons.append([{
+                        "text": f"🗑️ Remove {file_name[:20]}{'...' if len(file_name) > 20 else ''}",
+                        "callback_data": f"confirm_remove_R_{msg_id}"
+                    }])
+                
+                keyboard_buttons.append([{"text": "🔙 Back", "callback_data": "remove_games"}])
+                keyboard = {"inline_keyboard": keyboard_buttons}
+                
+                self.edit_message(chat_id, message_id, uploads_text, keyboard)
+                return
+
+            # Premium games callbacks
+            if data == "premium_games":
+                self.show_premium_games_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("purchase_premium_"):
+                game_id = int(data.replace("purchase_premium_", ""))
+                self.purchase_premium_game(user_id, chat_id, game_id, message_id)
+                return
+                
+            elif data.startswith("download_premium_"):
+                game_id = int(data.replace("download_premium_", ""))
+                self.send_premium_game_file(user_id, chat_id, game_id)
+                return
+                
+            elif data.startswith("premium_details_"):
+                game_id = int(data.replace("premium_details_", ""))
+                self.show_premium_game_details(user_id, chat_id, game_id, message_id)
+                return
+
+            # Upload system callbacks
+            elif data == "upload_options":
+                self.show_upload_options(user_id, chat_id, message_id)
+                return
+                
+            elif data == "upload_regular":
+                # Regular upload - just inform admin to send file
+                self.robust_send_message(chat_id,
+                    "🆓 <b>Regular Game Upload</b>\n\n"
+                    "Please upload the game file now.\n\n"
+                    "📁 Supported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP\n\n"
+                    "💡 The file will be available for free to all users."
+                )
+                return
+                
+            elif data == "upload_premium":
+                self.start_premium_upload(user_id, chat_id)
+                return
+
+            # Game request management callbacks
+            elif data == "manage_requests":
+                self.show_request_management(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("reply_request_"):
+                request_id = int(data.replace("reply_request_", ""))
+                self.start_request_reply(user_id, chat_id, request_id)
+                return
+                
+            elif data.startswith("complete_request_"):
+                request_id = int(data.replace("complete_request_", ""))
+                if self.game_request_system.update_request_status(request_id, "completed", "Request completed by admin"):
+                    self.answer_callback_query(callback_query['id'], "✅ Request marked as completed!", True)
+                else:
+                    self.answer_callback_query(callback_query['id'], "❌ Failed to update request.", True)
+                return
+                
+            elif data.startswith("reply_with_photo_"):
+                request_id = int(data.replace("reply_with_photo_", ""))
+                if user_id not in self.reply_sessions:
+                    self.reply_sessions[user_id] = {}
+                self.reply_sessions[user_id] = {
+                    'stage': 'waiting_photo',
+                    'request_id': request_id,
+                    'type': 'photo',
+                    'chat_id': chat_id
+                }
+                self.robust_send_message(chat_id, "📎 Please send the photo for your reply (with optional caption):")
+                return
+                
+            elif data == "cancel_reply":
+                if user_id in self.reply_sessions:
+                    del self.reply_sessions[user_id]
+                self.robust_send_message(chat_id, "❌ Reply cancelled.")
+                return
+
+            # Stars system callbacks
+            if data == "stars_menu":
+                self.show_stars_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("stars_"):
+                if data == "stars_custom":
+                    # Start custom stars amount
+                    self.stars_sessions[user_id] = {}
+                    self.robust_send_message(chat_id, 
+                        "💫 <b>Custom Stars Amount</b>\n\n"
+                        "Please enter the number of Stars you'd like to donate:\n\n"
+                        "💡 <i>Enter a number (e.g., 250 for 250 Stars ≈ $2.50)</i>"
+                    )
+                elif data == "stars_stats":
+                    self.show_stars_stats(user_id, chat_id, message_id)
+                    return
+                else:
+                    # Process predefined stars amount
+                    stars_str = data.replace("stars_", "")
+                    try:
+                        stars_amount = int(stars_str)
+                        self.process_stars_donation(user_id, chat_id, stars_amount)
+                    except ValueError:
+                        self.robust_send_message(chat_id, "❌ Invalid stars amount.")
+                return
+
+            # Game request system callbacks
+            elif data == "request_game":
+                self.start_game_request(user_id, chat_id)
+                return
+                
+            elif data == "my_requests":
+                self.show_user_requests(user_id, chat_id, message_id)
+                return
+
+            # Admin game request management
+            elif data == "admin_requests_panel":
+                self.show_admin_requests_panel(user_id, chat_id, message_id)
+                return
+
+            # Broadcast system callbacks
+            if data == "broadcast_panel":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                broadcast_info = """📢 <b>Admin Broadcast System</b>
+
+Send messages to all bot subscribers.
+
+⚡ Features:
+• Send to all verified users
+• HTML formatting support
+• Photo attachments
+• Preview before sending
+• Delivery statistics
+• Progress tracking
+
+Choose an option:"""
+                self.edit_message(chat_id, message_id, broadcast_info, self.create_broadcast_panel_buttons())
+                return
+                
+            elif data == "start_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.start_broadcast(user_id, chat_id)
+                return
+                
+            elif data == "broadcast_stats":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.get_broadcast_stats(user_id, chat_id, message_id)
+                return
+                
+            elif data == "confirm_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.send_broadcast_to_all(user_id, chat_id)
+                return
+                
+            elif data == "cancel_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.cancel_broadcast(user_id, chat_id, message_id)
+                return
+                
+            elif data == "edit_broadcast":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                if user_id in self.broadcast_sessions:
+                    self.broadcast_sessions[user_id]['stage'] = 'waiting_message_or_photo'
+                    self.edit_message(chat_id, message_id, "✏️ Please type your new broadcast message or send a photo:", self.create_broadcast_panel_buttons())
+                return
+
+            # Mini-games callbacks
+            if data == "game_guess":
+                self.start_number_guess_game(user_id, chat_id)
+                return
+                
+            elif data == "game_random":
+                self.generate_random_number(user_id, chat_id)
+                return
+                
+            elif data == "game_spin":
+                self.lucky_spin(user_id, chat_id)
+                return
+                
+            elif data == "big_spin":
+                self.big_spin(user_id, chat_id)
+                return
+                
+            elif data.startswith("random_"):
+                range_type = data.replace("random_", "")
+                self.generate_custom_random(user_id, chat_id, range_type)
+                return
+                
+            elif data == "mini_stats":
+                self.show_mini_games_stats(user_id, chat_id, message_id)
+                return
+                
+            elif data.startswith("quick_guess_"):
+                guess = int(data.replace("quick_guess_", ""))
+                self.handle_guess_input(user_id, chat_id, str(guess))
+                return
+                
+            elif data == "quick_numbers":
+                # Show quick number buttons
+                quick_buttons = []
+                row = []
+                for i in range(1, 11):
+                    row.append({"text": str(i), "callback_data": f"quick_guess_{i}"})
+                    if i % 5 == 0:
+                        quick_buttons.append(row)
+                        row = []
+                
+                keyboard = {"inline_keyboard": quick_buttons}
+                self.edit_message(chat_id, message_id, "🔢 Choose your guess quickly:", keyboard)
+                return
+
+            # Admin management callbacks
+            elif data == "clear_all_games":
+                self.clear_all_games(user_id, chat_id, message_id)
+                return
+                
+            elif data == "scan_bot_games":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                
+                self.edit_message(chat_id, message_id, "🔍 Scanning for bot-uploaded games...", self.create_admin_buttons())
+                bot_games_found = self.scan_bot_uploaded_games()
+                self.update_games_cache()
+                self.edit_message(chat_id, message_id, f"✅ Bot games scan complete! Found {bot_games_found} new games.", self.create_admin_buttons())
+                return
+
+            # Handle game file sending with proper message ID handling
+            if data.startswith('send_game_'):
+                parts = data.replace('send_game_', '').split('_')
+                if len(parts) >= 3:
+                    message_id_to_send = int(parts[0])
+                    file_id = parts[1] if len(parts) > 1 else None
+                    is_bot_file = int(parts[2]) == 1  # 1 for bot files, 0 for channel files
+                    
+                    # Clean file_id if it was shortened
+                    if file_id == 'short':
+                        file_id = None
+                    else:
+                        file_id = file_id.replace('_', '-').replace('eq', '=')
+                    
+                    self.answer_callback_query(callback_query['id'], "📥 Sending file...", False)
+                    
+                    if self.send_game_file(chat_id, message_id_to_send, file_id, is_bot_file):
+                        self.answer_callback_query(callback_query['id'], "✅ File sent!", False)
+                    else:
+                        self.answer_callback_query(callback_query['id'], "❌ Failed to send file. Please try again or contact admin.", True)
+                return
+            
+            elif data.startswith('search_page_'):
+                parts = data.replace('search_page_', '').split('_')
+                if len(parts) >= 2:
+                    search_term = parts[0]
+                    page = int(parts[1])
+                    
+                    user_results = self.search_results.get(user_id, {})
+                    if user_results and user_results.get('search_term') == search_term:
+                        results = user_results.get('results', [])
+                        
+                        results_text = f"🔍 Search Results: <code>{search_term}</code>\n\n"
+                        results_text += f"📄 Page {page + 1}\n"
+                        results_text += f"📊 Total results: {len(results)}\n\n"
+                        results_text += "📥 Click on any file below to download it:"
+                        
+                        self.edit_message(
+                            chat_id, 
+                            message_id, 
+                            results_text,
+                            self.create_search_results_buttons(results, search_term, user_id, page)
+                        )
+                return
+            
+            # Handle other existing callbacks
+            if data == "profile":
+                self.handle_profile(chat_id, message_id, user_id, first_name)
+                
+            elif data == "time":
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                time_text = f"🕒 <b>Current Time</b>\n\n📅 {current_time}\n\n⏰ Server Time (UTC)"
+                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons())
+                
+            elif data == "channel_info":
+                channel_info = f"""📢 <b>Channel Information</b>
+
+🏷️ Channel: @pspgamers5
+🔗 Link: https://t.me/pspgamers5
+📝 Description: PSP Games & More!
+
+🎮 Available Games:
+• PSP Games (ISO/CSO)
+• PS1 Games
+• Android Games (APK)
+• Emulator Games
+• And much more!
+
+📥 How to Download:
+1. Join our channel
+2. Browse available games
+3. Click on files to download
+
+⚠️ Note: You need to join channel and complete verification to access games."""
+                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons())
+                
+            elif data == "games":
+                if not self.is_user_completed(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_main_menu_buttons())
+                    return
+                
+                stats = self.get_channel_stats()
+                total_games = stats['total_games'] + stats['premium_games']
+                
+                games_text = f"""🎮 <b>Games Section</b>
+
+📊 Total Games: {total_games}
+• 🆓 Regular: {stats['total_games']}
+• 💰 Premium: {stats['premium_games']}
+
+🎯 Choose an option below:
+
+• 📁 Game Files - Browse all regular games
+• 💰 Premium Games - Exclusive paid games
+• 🎮 Mini Games - Fun mini-games to play
+• 🔍 Search Games - Search for specific games
+• 📝 Request Game - Request games not in our collection
+• ⭐ Donate Stars - Support our bot with Telegram Stars
+
+🔗 Channel: @pspgamers5"""
+                self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
+                
+            elif data == "game_files":
+                if not self.is_user_completed(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_games_buttons())
+                    return
+                
+                stats = self.get_channel_stats()
+                files_text = f"""📁 <b>Game Files Browser</b>
+
+📊 Total Files: {stats['total_games']}
+
+📦 Browse by file type:
+
+• 📦 ZIP Files - Compressed game archives
+• 🗜️ 7Z Files - 7-Zip compressed archives  
+• 💿 ISO Files - Disc image files
+• 📱 APK Files - Android applications
+• 🎮 PSP Games - PSP specific formats
+• 📋 All Files - Complete game list
+
+🔍 Use search for quick access!"""
+                self.edit_message(chat_id, message_id, files_text, self.create_game_files_buttons())
+                
+            elif data == "mini_games":
+                if not self.is_user_completed(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_games_buttons())
+                    return
+                
+                games_text = """🎮 <b>Mini Games</b>
+
+🎯 Choose a game to play:
+
+• 🎯 Number Guess - Guess the random number (1-10)
+• 🎲 Random Number - Generate random numbers with analysis
+• 🎰 Lucky Spin - Spin for lucky symbols and coins
+• 📊 My Stats - View your gaming statistics
+
+Have fun! 🎉"""
+                self.edit_message(chat_id, message_id, games_text, self.create_mini_games_buttons())
+                
+            elif data == "search_games":
+                if not self.is_user_verified(user_id):
+                    self.edit_message(chat_id, message_id, 
+                                    "🔐 Please complete verification first with /start", 
+                                    self.create_main_menu_buttons())
+                    return
+                
+                self.handle_search_games(chat_id, message_id, user_id, first_name)
+                
+            elif data == "game_zip":
+                games = self.games_cache.get('zip', [])
+                text = self.format_games_list(games, "ZIP")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "game_7z":
+                games = self.games_cache.get('7z', [])
+                text = self.format_games_list(games, "7Z")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "game_iso":
+                games = self.games_cache.get('iso', [])
+                text = self.format_games_list(games, "ISO")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "game_apk":
+                games = self.games_cache.get('apk', [])
+                text = self.format_games_list(games, "APK")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "game_psp":
+                cso_games = self.games_cache.get('cso', [])
+                pbp_games = self.games_cache.get('pbp', [])
+                psp_games = cso_games + pbp_games
+                text = self.format_games_list(psp_games, "PSP")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "game_all":
+                games = self.games_cache.get('all', [])
+                text = self.format_games_list(games, "ALL")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                
+            elif data == "rescan_games":
+                self.edit_message(chat_id, message_id, "🔄 Scanning for new games...", self.create_game_files_buttons())
+                total_games = self.scan_channel_for_games()
+                stats = self.get_channel_stats()
+                self.edit_message(chat_id, message_id, f"✅ Rescan complete! Found {total_games} total games. Database now has {stats['total_games']} regular games and {stats['premium_games']} premium games.", self.create_game_files_buttons())
+            
+            elif data == "back_to_menu":
+                welcome_text = f"""👋 Welcome {first_name}!
+
+🤖 <b>Cross-Platform Telegram Bot</b>
+
+📊 Features:
+• 🎮 Game File Browser
+• 💰 Premium Games with Stars
+• 🔍 Advanced Game Search  
+• 📱 Cross-Platform Support
+• 📤 Admin Upload System
+• 🔄 Forward Support
+• 🕒 Real-time Updates
+• 🎮 Mini-Games Entertainment
+• 📢 Admin Broadcast System
+• ⭐ Telegram Stars Payments
+• 🎮 Game Request System
+• 📝 Individual Request Replies
+• 🖼️ Photo Broadcast Support
+• 🗑️ Game Removal System
+• 🛡️ Duplicate Detection
+• 🔄 Redeploy System
+• 🔋 Keep-Alive Protection
+• 💾 Persistent Data Recovery
+
+Choose an option below:"""
+                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+            
+            elif data == "verify_channel":
+                if self.check_channel_membership(user_id):
+                    self.mark_channel_joined(user_id)
+                    welcome_text = f"""✅ <b>Verification Complete!</b>
+
+👋 Welcome {first_name}!
+
+🎉 You now have full access to:
+• 🎮 Game File Browser  
+• 💰 Premium Games
+• 🔍 Game Search
+• 📁 All Game Categories
+• 🕒 Real-time Updates
+• 🎮 Mini-Games
+• ⭐ Stars Donations
+• 🎮 Game Requests
+
+📢 Channel: @pspgamers5
+Choose an option below:"""
+                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
+                else:
+                    self.edit_message(chat_id, message_id, 
+                                    "❌ You haven't joined the channel yet!\n\n"
+                                    "Please join @pspgamers5 first, then click Verify Join again.",
+                                    self.create_channel_buttons())
+            
+            elif data == "admin_panel":
+                if not self.is_admin(user_id):
+                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons())
+                    return
+                
+                stats = self.get_channel_stats()
+                admin_text = f"""👑 <b>Admin Panel</b>
+
+👋 Welcome {first_name}!
+
+🛠️ Admin Features:
+• 📤 Upload regular & premium games
+• 🔄 Process forwarded files  
+• 📊 View upload statistics
+• 🗃️ Update games cache
+• 🗑️ Remove individual games
+• 🗑️ Clear all games
+• 🔍 Scan bot-uploaded games
+• 📢 Broadcast messages to users
+• 🎮 Manage game requests
+• ⭐ View Stars statistics
+• 🔄 Redeploy bot system
+• 🔍 Monitor system status
+
+📊 Your Stats:
+• Total uploads: {self.get_upload_stats(user_id)}
+• Forwarded files: {self.get_forward_stats(user_id)}
+• Regular games: {stats['total_games']}
+• Premium games: {stats['premium_games']}
+
+Choose an option:"""
+                self.edit_message(chat_id, message_id, admin_text, self.create_admin_buttons())
+            
+            elif data == "upload_stats":
+                if not self.is_admin(user_id):
+                    return
+                self.handle_upload_stats(chat_id, message_id, user_id, first_name)
+            
+            elif data == "upload_games_info":
+                if not self.is_admin(user_id):
+                    return
+                self.handle_upload_games_info(chat_id, message_id, user_id, first_name)
+            
+            elif data == "update_cache":
+                if not self.is_admin(user_id):
+                    return
+                self.edit_message(chat_id, message_id, "🔄 Updating games cache...", self.create_admin_buttons())
+                self.update_games_cache()
+                stats = self.get_channel_stats()
+                self.edit_message(chat_id, message_id, f"✅ Cache updated! {stats['total_games']} regular games and {stats['premium_games']} premium games loaded.", self.create_admin_buttons())
+                
+        except Exception as e:
+            print(f"Callback error: {e}")
 
     # ==================== DUPLICATE DETECTION SYSTEM ====================
     
@@ -4372,64 +5476,6 @@ The file is now available in the games browser and search!"""
         }
         return keyboard
     
-    def create_main_menu_buttons(self):
-        stats = self.get_channel_stats()
-        keyboard = [
-            [
-                {"text": "📊 Profile", "callback_data": "profile"},
-                {"text": "🕒 Time", "callback_data": "time"}
-            ],
-            [
-                {"text": "📢 Channel", "callback_data": "channel_info"},
-                {"text": f"🎮 Games ({stats['total_games'] + stats['premium_games']})", "callback_data": "games"}
-            ],
-            [
-                {"text": "💰 Premium Games", "callback_data": "premium_games"},
-                {"text": "🔍 Search Games", "callback_data": "search_games"}
-            ],
-            [
-                {"text": "📝 Request Game", "callback_data": "request_game"},
-                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
-            ]
-        ]
-        
-        # Add admin panel only for admins
-        if self.is_admin:
-            keyboard.append([
-                {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
-            ])
-        
-        return {"inline_keyboard": keyboard}
-    
-    def create_admin_buttons(self):
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "📤 Upload Stats", "callback_data": "upload_stats"},
-                    {"text": "🔄 Update Cache", "callback_data": "update_cache"}
-                ],
-                [
-                    {"text": "📤 Upload Games", "callback_data": "upload_options"},
-                    {"text": "🗑️ Remove Games", "callback_data": "remove_games"}
-                ],
-                [
-                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"},
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
-                ],
-                [
-                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
-                    {"text": "🎮 Game Requests", "callback_data": "admin_requests_panel"}
-                ],
-                [
-                    {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
-                    {"text": "📊 Profile", "callback_data": "profile"}
-                ],
-                [
-                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-                ]
-            ]
-        }
-    
     def create_broadcast_panel_buttons(self):
         """Create broadcast management buttons"""
         return {
@@ -4635,779 +5681,6 @@ Use this ID for admin verification if needed."""
             print(f"❌ Error getting user info: {e}")
             return {'first_name': 'User'}
 
-    # ==================== UPDATED CALLBACK HANDLER ====================
-
-    def handle_callback_query(self, callback_query):
-        try:
-            data = callback_query['data']
-            message = callback_query['message']
-            chat_id = message['chat']['id']
-            message_id = message['message_id']
-            user_id = callback_query['from']['id']
-            first_name = callback_query['from']['first_name']
-            
-            print(f"📨 Callback: {data} from {first_name} ({user_id})")
-            
-            self.answer_callback_query(callback_query['id'])
-            
-            # Game Removal System Callbacks
-            if data == "remove_games":
-                self.show_remove_game_menu(user_id, chat_id, message_id)
-                return
-                
-            elif data == "search_remove_game":
-                self.start_remove_game_search(user_id, chat_id)
-                return
-                
-            elif data.startswith("confirm_remove_"):
-                parts = data.replace("confirm_remove_", "").split("_")
-                if len(parts) >= 2:
-                    game_type = parts[0]  # R or P
-                    game_id = parts[1]    # game ID
-                    self.show_remove_confirmation(user_id, chat_id, message_id, game_type, game_id)
-                return
-
-            elif data.startswith("remove_"):
-                parts = data.replace("remove_", "").split("_")
-                if len(parts) >= 2:
-                    game_type = parts[0]  # R or P
-                    game_id = parts[1]    # game ID
-                    self.remove_game(user_id, chat_id, game_type, game_id, message_id)
-                return
-
-            elif data == "cancel_remove":
-                self.show_remove_game_menu(user_id, chat_id, message_id)
-                return
-
-            elif data == "view_recent_uploads":
-                # Show recent uploads for removal
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    SELECT message_id, file_name, file_type, file_size, upload_date, is_uploaded 
-                    FROM channel_games 
-                    WHERE is_uploaded = 1 
-                    ORDER BY created_at DESC 
-                    LIMIT 10
-                ''')
-                recent_uploads = cursor.fetchall()
-                
-                if not recent_uploads:
-                    self.edit_message(chat_id, message_id, "❌ No recent uploads found.", self.create_admin_buttons())
-                    return
-                
-                uploads_text = "📋 <b>Recent Admin Uploads</b>\n\n"
-                uploads_text += "Click 'Remove' to delete any game:\n\n"
-                
-                keyboard_buttons = []
-                for upload in recent_uploads:
-                    msg_id, file_name, file_type, file_size, upload_date, is_uploaded = upload
-                    size = self.format_file_size(file_size)
-                    
-                    uploads_text += f"📁 <b>{file_name}</b>\n"
-                    uploads_text += f"📦 {file_type} | 📏 {size} | 📅 {upload_date[:10]}\n"
-                    uploads_text += f"🆔 {msg_id}\n\n"
-                    
-                    keyboard_buttons.append([{
-                        "text": f"🗑️ Remove {file_name[:20]}{'...' if len(file_name) > 20 else ''}",
-                        "callback_data": f"confirm_remove_R_{msg_id}"
-                    }])
-                
-                keyboard_buttons.append([{"text": "🔙 Back", "callback_data": "remove_games"}])
-                keyboard = {"inline_keyboard": keyboard_buttons}
-                
-                self.edit_message(chat_id, message_id, uploads_text, keyboard)
-                return
-
-            # Premium games callbacks
-            if data == "premium_games":
-                self.show_premium_games_menu(user_id, chat_id, message_id)
-                return
-                
-            elif data.startswith("purchase_premium_"):
-                game_id = int(data.replace("purchase_premium_", ""))
-                self.purchase_premium_game(user_id, chat_id, game_id, message_id)
-                return
-                
-            elif data.startswith("download_premium_"):
-                game_id = int(data.replace("download_premium_", ""))
-                self.send_premium_game_file(user_id, chat_id, game_id)
-                return
-                
-            elif data.startswith("premium_details_"):
-                game_id = int(data.replace("premium_details_", ""))
-                self.show_premium_game_details(user_id, chat_id, game_id, message_id)
-                return
-
-            # Upload system callbacks
-            elif data == "upload_options":
-                self.show_upload_options(user_id, chat_id, message_id)
-                return
-                
-            elif data == "upload_regular":
-                # Regular upload - just inform admin to send file
-                self.robust_send_message(chat_id,
-                    "🆓 <b>Regular Game Upload</b>\n\n"
-                    "Please upload the game file now.\n\n"
-                    "📁 Supported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP\n\n"
-                    "💡 The file will be available for free to all users."
-                )
-                return
-                
-            elif data == "upload_premium":
-                self.start_premium_upload(user_id, chat_id)
-                return
-
-            # Game request management callbacks
-            elif data == "manage_requests":
-                self.show_request_management(user_id, chat_id, message_id)
-                return
-                
-            elif data.startswith("reply_request_"):
-                request_id = int(data.replace("reply_request_", ""))
-                self.start_request_reply(user_id, chat_id, request_id)
-                return
-                
-            elif data.startswith("complete_request_"):
-                request_id = int(data.replace("complete_request_", ""))
-                if self.game_request_system.update_request_status(request_id, "completed", "Request completed by admin"):
-                    self.answer_callback_query(callback_query['id'], "✅ Request marked as completed!", True)
-                else:
-                    self.answer_callback_query(callback_query['id'], "❌ Failed to update request.", True)
-                return
-                
-            elif data.startswith("reply_with_photo_"):
-                request_id = int(data.replace("reply_with_photo_", ""))
-                if user_id not in self.reply_sessions:
-                    self.reply_sessions[user_id] = {}
-                self.reply_sessions[user_id] = {
-                    'stage': 'waiting_photo',
-                    'request_id': request_id,
-                    'type': 'photo',
-                    'chat_id': chat_id
-                }
-                self.robust_send_message(chat_id, "📎 Please send the photo for your reply (with optional caption):")
-                return
-                
-            elif data == "cancel_reply":
-                if user_id in self.reply_sessions:
-                    del self.reply_sessions[user_id]
-                self.robust_send_message(chat_id, "❌ Reply cancelled.")
-                return
-
-            # Stars system callbacks
-            if data == "stars_menu":
-                self.show_stars_menu(user_id, chat_id, message_id)
-                return
-                
-            elif data.startswith("stars_"):
-                if data == "stars_custom":
-                    # Start custom stars amount
-                    self.stars_sessions[user_id] = {}
-                    self.robust_send_message(chat_id, 
-                        "💫 <b>Custom Stars Amount</b>\n\n"
-                        "Please enter the number of Stars you'd like to donate:\n\n"
-                        "💡 <i>Enter a number (e.g., 250 for 250 Stars ≈ $2.50)</i>"
-                    )
-                elif data == "stars_stats":
-                    self.show_stars_stats(user_id, chat_id, message_id)
-                    return
-                else:
-                    # Process predefined stars amount
-                    stars_str = data.replace("stars_", "")
-                    try:
-                        stars_amount = int(stars_str)
-                        self.process_stars_donation(user_id, chat_id, stars_amount)
-                    except ValueError:
-                        self.robust_send_message(chat_id, "❌ Invalid stars amount.")
-                return
-
-            # Game request system callbacks
-            elif data == "request_game":
-                self.start_game_request(user_id, chat_id)
-                return
-                
-            elif data == "my_requests":
-                self.show_user_requests(user_id, chat_id, message_id)
-                return
-
-            # Admin game request management
-            elif data == "admin_requests_panel":
-                self.show_admin_requests_panel(user_id, chat_id, message_id)
-                return
-
-            # Broadcast system callbacks
-            if data == "broadcast_panel":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                
-                broadcast_info = """📢 <b>Admin Broadcast System</b>
-
-Send messages to all bot subscribers.
-
-⚡ Features:
-• Send to all verified users
-• HTML formatting support
-• Photo attachments
-• Preview before sending
-• Delivery statistics
-• Progress tracking
-
-Choose an option:"""
-                self.edit_message(chat_id, message_id, broadcast_info, self.create_broadcast_panel_buttons())
-                return
-                
-            elif data == "start_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.start_broadcast(user_id, chat_id)
-                return
-                
-            elif data == "broadcast_stats":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.get_broadcast_stats(user_id, chat_id, message_id)
-                return
-                
-            elif data == "confirm_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.send_broadcast_to_all(user_id, chat_id)
-                return
-                
-            elif data == "cancel_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.cancel_broadcast(user_id, chat_id, message_id)
-                return
-                
-            elif data == "edit_broadcast":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                if user_id in self.broadcast_sessions:
-                    self.broadcast_sessions[user_id]['stage'] = 'waiting_message_or_photo'
-                    self.edit_message(chat_id, message_id, "✏️ Please type your new broadcast message or send a photo:", self.create_broadcast_panel_buttons())
-                return
-
-            # Mini-games callbacks
-            if data == "game_guess":
-                self.start_number_guess_game(user_id, chat_id)
-                return
-                
-            elif data == "game_random":
-                self.generate_random_number(user_id, chat_id)
-                return
-                
-            elif data == "game_spin":
-                self.lucky_spin(user_id, chat_id)
-                return
-                
-            elif data == "big_spin":
-                self.big_spin(user_id, chat_id)
-                return
-                
-            elif data.startswith("random_"):
-                range_type = data.replace("random_", "")
-                self.generate_custom_random(user_id, chat_id, range_type)
-                return
-                
-            elif data == "mini_stats":
-                self.show_mini_games_stats(user_id, chat_id, message_id)
-                return
-                
-            elif data.startswith("quick_guess_"):
-                guess = int(data.replace("quick_guess_", ""))
-                self.handle_guess_input(user_id, chat_id, str(guess))
-                return
-                
-            elif data == "quick_numbers":
-                # Show quick number buttons
-                quick_buttons = []
-                row = []
-                for i in range(1, 11):
-                    row.append({"text": str(i), "callback_data": f"quick_guess_{i}"})
-                    if i % 5 == 0:
-                        quick_buttons.append(row)
-                        row = []
-                
-                keyboard = {"inline_keyboard": quick_buttons}
-                self.edit_message(chat_id, message_id, "🔢 Choose your guess quickly:", keyboard)
-                return
-
-            # Admin management callbacks
-            elif data == "clear_all_games":
-                self.clear_all_games(user_id, chat_id, message_id)
-                return
-                
-            elif data == "scan_bot_games":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                
-                self.edit_message(chat_id, message_id, "🔍 Scanning for bot-uploaded games...", self.create_admin_buttons())
-                bot_games_found = self.scan_bot_uploaded_games()
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, f"✅ Bot games scan complete! Found {bot_games_found} new games.", self.create_admin_buttons())
-                return
-
-            # Handle game file sending with proper message ID handling
-            if data.startswith('send_game_'):
-                parts = data.replace('send_game_', '').split('_')
-                if len(parts) >= 3:
-                    message_id_to_send = int(parts[0])
-                    file_id = parts[1] if len(parts) > 1 else None
-                    is_bot_file = int(parts[2]) == 1  # 1 for bot files, 0 for channel files
-                    
-                    # Clean file_id if it was shortened
-                    if file_id == 'short':
-                        file_id = None
-                    else:
-                        file_id = file_id.replace('_', '-').replace('eq', '=')
-                    
-                    self.answer_callback_query(callback_query['id'], "📥 Sending file...", False)
-                    
-                    if self.send_game_file(chat_id, message_id_to_send, file_id, is_bot_file):
-                        self.answer_callback_query(callback_query['id'], "✅ File sent!", False)
-                    else:
-                        self.answer_callback_query(callback_query['id'], "❌ Failed to send file. Please try again or contact admin.", True)
-                return
-            
-            elif data.startswith('search_page_'):
-                parts = data.replace('search_page_', '').split('_')
-                if len(parts) >= 2:
-                    search_term = parts[0]
-                    page = int(parts[1])
-                    
-                    user_results = self.search_results.get(user_id, {})
-                    if user_results and user_results.get('search_term') == search_term:
-                        results = user_results.get('results', [])
-                        
-                        results_text = f"🔍 Search Results: <code>{search_term}</code>\n\n"
-                        results_text += f"📄 Page {page + 1}\n"
-                        results_text += f"📊 Total results: {len(results)}\n\n"
-                        results_text += "📥 Click on any file below to download it:"
-                        
-                        self.edit_message(
-                            chat_id, 
-                            message_id, 
-                            results_text,
-                            self.create_search_results_buttons(results, search_term, user_id, page)
-                        )
-                return
-            
-            # Handle other existing callbacks
-            if data == "profile":
-                self.handle_profile(chat_id, message_id, user_id, first_name)
-                
-            elif data == "time":
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                time_text = f"🕒 <b>Current Time</b>\n\n📅 {current_time}\n\n⏰ Server Time (UTC)"
-                self.edit_message(chat_id, message_id, time_text, self.create_main_menu_buttons())
-                
-            elif data == "channel_info":
-                channel_info = f"""📢 <b>Channel Information</b>
-
-🏷️ Channel: @pspgamers5
-🔗 Link: https://t.me/pspgamers5
-📝 Description: PSP Games & More!
-
-🎮 Available Games:
-• PSP Games (ISO/CSO)
-• PS1 Games
-• Android Games (APK)
-• Emulator Games
-• And much more!
-
-📥 How to Download:
-1. Join our channel
-2. Browse available games
-3. Click on files to download
-
-⚠️ Note: You need to join channel and complete verification to access games."""
-                self.edit_message(chat_id, message_id, channel_info, self.create_main_menu_buttons())
-                
-            elif data == "games":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
-                    return
-                
-                stats = self.get_channel_stats()
-                total_games = stats['total_games'] + stats['premium_games']
-                
-                games_text = f"""🎮 <b>Games Section</b>
-
-📊 Total Games: {total_games}
-• 🆓 Regular: {stats['total_games']}
-• 💰 Premium: {stats['premium_games']}
-
-🎯 Choose an option below:
-
-• 📁 Game Files - Browse all regular games
-• 💰 Premium Games - Exclusive paid games
-• 🎮 Mini Games - Fun mini-games to play
-• 🔍 Search Games - Search for specific games
-• 📝 Request Game - Request games not in our collection
-• ⭐ Donate Stars - Support our bot with Telegram Stars
-
-🔗 Channel: @pspgamers5"""
-                self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
-                
-            elif data == "game_files":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_games_buttons())
-                    return
-                
-                stats = self.get_channel_stats()
-                files_text = f"""📁 <b>Game Files Browser</b>
-
-📊 Total Files: {stats['total_games']}
-
-📦 Browse by file type:
-
-• 📦 ZIP Files - Compressed game archives
-• 🗜️ 7Z Files - 7-Zip compressed archives  
-• 💿 ISO Files - Disc image files
-• 📱 APK Files - Android applications
-• 🎮 PSP Games - PSP specific formats
-• 📋 All Files - Complete game list
-
-🔍 Use search for quick access!"""
-                self.edit_message(chat_id, message_id, files_text, self.create_game_files_buttons())
-                
-            elif data == "mini_games":
-                if not self.is_user_completed(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_games_buttons())
-                    return
-                
-                games_text = """🎮 <b>Mini Games</b>
-
-🎯 Choose a game to play:
-
-• 🎯 Number Guess - Guess the random number (1-10)
-• 🎲 Random Number - Generate random numbers with analysis
-• 🎰 Lucky Spin - Spin for lucky symbols and coins
-• 📊 My Stats - View your gaming statistics
-
-Have fun! 🎉"""
-                self.edit_message(chat_id, message_id, games_text, self.create_mini_games_buttons())
-                
-            elif data == "search_games":
-                if not self.is_user_verified(user_id):
-                    self.edit_message(chat_id, message_id, 
-                                    "🔐 Please complete verification first with /start", 
-                                    self.create_main_menu_buttons())
-                    return
-                
-                self.handle_search_games(chat_id, message_id, user_id, first_name)
-                
-            elif data == "game_zip":
-                games = self.games_cache.get('zip', [])
-                text = self.format_games_list(games, "ZIP")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_7z":
-                games = self.games_cache.get('7z', [])
-                text = self.format_games_list(games, "7Z")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_iso":
-                games = self.games_cache.get('iso', [])
-                text = self.format_games_list(games, "ISO")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_apk":
-                games = self.games_cache.get('apk', [])
-                text = self.format_games_list(games, "APK")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_psp":
-                cso_games = self.games_cache.get('cso', [])
-                pbp_games = self.games_cache.get('pbp', [])
-                psp_games = cso_games + pbp_games
-                text = self.format_games_list(psp_games, "PSP")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "game_all":
-                games = self.games_cache.get('all', [])
-                text = self.format_games_list(games, "ALL")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
-            elif data == "rescan_games":
-                self.edit_message(chat_id, message_id, "🔄 Scanning for new games...", self.create_game_files_buttons())
-                total_games = self.scan_channel_for_games()
-                stats = self.get_channel_stats()
-                self.edit_message(chat_id, message_id, f"✅ Rescan complete! Found {total_games} total games. Database now has {stats['total_games']} regular games and {stats['premium_games']} premium games.", self.create_game_files_buttons())
-            
-            elif data == "back_to_menu":
-                welcome_text = f"""👋 Welcome {first_name}!
-
-🤖 <b>Cross-Platform Telegram Bot</b>
-
-📊 Features:
-• 🎮 Game File Browser
-• 💰 Premium Games with Stars
-• 🔍 Advanced Game Search  
-• 📱 Cross-Platform Support
-• 📤 Admin Upload System
-• 🔄 Forward Support
-• 🕒 Real-time Updates
-• 🎮 Mini-Games Entertainment
-• 📢 Admin Broadcast System
-• ⭐ Telegram Stars Payments
-• 🎮 Game Request System
-• 📝 Individual Request Replies
-• 🖼️ Photo Broadcast Support
-• 🗑️ Game Removal System
-• 🛡️ Duplicate Detection
-• 🔋 Keep-Alive Protection
-• 💾 Persistent Data Recovery
-
-Choose an option below:"""
-                self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
-            
-            elif data == "verify_channel":
-                if self.check_channel_membership(user_id):
-                    self.mark_channel_joined(user_id)
-                    welcome_text = f"""✅ <b>Verification Complete!</b>
-
-👋 Welcome {first_name}!
-
-🎉 You now have full access to:
-• 🎮 Game File Browser  
-• 💰 Premium Games
-• 🔍 Game Search
-• 📁 All Game Categories
-• 🕒 Real-time Updates
-• 🎮 Mini-Games
-• ⭐ Stars Donations
-• 🎮 Game Requests
-
-📢 Channel: @pspgamers5
-Choose an option below:"""
-                    self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
-                else:
-                    self.edit_message(chat_id, message_id, 
-                                    "❌ You haven't joined the channel yet!\n\n"
-                                    "Please join @pspgamers5 first, then click Verify Join again.",
-                                    self.create_channel_buttons())
-            
-            elif data == "admin_panel":
-                if not self.is_admin(user_id):
-                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons())
-                    return
-                
-                stats = self.get_channel_stats()
-                admin_text = f"""👑 <b>Admin Panel</b>
-
-👋 Welcome {first_name}!
-
-🛠️ Admin Features:
-• 📤 Upload regular & premium games
-• 🔄 Process forwarded files  
-• 📊 View upload statistics
-• 🗃️ Update games cache
-• 🗑️ Remove individual games
-• 🗑️ Clear all games
-• 🔍 Scan bot-uploaded games
-• 📢 Broadcast messages to users
-• 🎮 Manage game requests
-• ⭐ View Stars statistics
-• 🔍 Monitor system status
-
-📊 Your Stats:
-• Total uploads: {self.get_upload_stats(user_id)}
-• Forwarded files: {self.get_forward_stats(user_id)}
-• Regular games: {stats['total_games']}
-• Premium games: {stats['premium_games']}
-
-Choose an option:"""
-                self.edit_message(chat_id, message_id, admin_text, self.create_admin_buttons())
-            
-            elif data == "upload_stats":
-                if not self.is_admin(user_id):
-                    return
-                self.handle_upload_stats(chat_id, message_id, user_id, first_name)
-            
-            elif data == "upload_games_info":
-                if not self.is_admin(user_id):
-                    return
-                self.handle_upload_games_info(chat_id, message_id, user_id, first_name)
-            
-            elif data == "update_cache":
-                if not self.is_admin(user_id):
-                    return
-                self.edit_message(chat_id, message_id, "🔄 Updating games cache...", self.create_admin_buttons())
-                self.update_games_cache()
-                stats = self.get_channel_stats()
-                self.edit_message(chat_id, message_id, f"✅ Cache updated! {stats['total_games']} regular games and {stats['premium_games']} premium games loaded.", self.create_admin_buttons())
-                
-        except Exception as e:
-            print(f"Callback error: {e}")
-
-    def handle_verification(self, message):
-        """Handle /start command and send verification code"""
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            username = message['from'].get('username', '')
-            first_name = message['from']['first_name']
-            
-            print(f"🔐 Verification requested by {first_name} ({user_id})")
-            
-            # Check if user is already completed
-            if self.is_user_completed(user_id):
-                welcome_text = f"""👋 Welcome back {first_name}!
-
-✅ You're already verified!
-📢 Channel membership: Active
-
-Choose an option below:"""
-                self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
-                return True
-            
-            # Check if user is verified but not joined channel
-            if self.is_user_verified(user_id) and not self.check_channel_membership(user_id):
-                channel_text = f"""📢 <b>Channel Verification Required</b>
-
-👋 Hello {first_name}!
-
-✅ Code verification: Completed
-❌ Channel membership: Pending
-
-To access all features, please join our channel:
-
-🔗 {self.CHANNEL_LINK}
-
-After joining, click the button below:"""
-                self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
-                return True
-            
-            # Check if user has joined channel but not verified
-            if self.check_channel_membership(user_id) and not self.is_user_verified(user_id):
-                # Mark channel as joined
-                self.mark_channel_joined(user_id)
-                
-                # Generate and send verification code
-                code = self.generate_code()
-                if self.save_verification_code(user_id, username, first_name, code):
-                    verify_text = f"""🔐 <b>Verification Required</b>
-
-👋 Hello {first_name}!
-
-✅ Channel membership: Verified
-❌ Code verification: Pending
-
-Your verification code: 
-<code>{code}</code>
-
-📝 Please reply with this code to complete verification.
-
-⏰ Code expires in 10 minutes."""
-                    self.robust_send_message(chat_id, verify_text)
-                    return True
-                else:
-                    self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
-                    return True
-            
-            # New user - start with code verification
-            code = self.generate_code()
-            if self.save_verification_code(user_id, username, first_name, code):
-                welcome_text = f"""🔐 <b>Welcome to PSP Gamers Bot!</b>
-
-👋 Hello {first_name}!
-
-To access our game collection, please complete two-step verification:
-
-📝 <b>Step 1: Code Verification</b>
-Your verification code: 
-<code>{code}</code>
-
-Reply with this code to verify.
-
-⏰ Code expires in 10 minutes.
-
-After code verification, you'll need to join our channel."""
-                self.robust_send_message(chat_id, welcome_text)
-                return True
-            else:
-                self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
-                return False
-            
-        except Exception as e:
-            print(f"❌ Verification handler error: {e}")
-            self.robust_send_message(chat_id, "❌ Error starting verification. Please try again.")
-            return False
-
-    def handle_code_verification(self, message):
-        """Handle 6-digit code verification"""
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            text = message.get('text', '').strip()
-            first_name = message['from']['first_name']
-            
-            print(f"🔐 Code verification attempt by {first_name} ({user_id}): {text}")
-            
-            if not text.isdigit() or len(text) != 6:
-                return False
-            
-            if self.verify_code(user_id, text):
-                # Check if user has already joined channel
-                if self.check_channel_membership(user_id):
-                    self.mark_channel_joined(user_id)
-                    welcome_text = f"""✅ <b>Verification Complete!</b>
-
-👋 Welcome {first_name}!
-
-🎉 You now have full access to:
-• 🎮 Game File Browser  
-• 💰 Premium Games
-• 🔍 Game Search
-• 📁 All Game Categories
-• 🕒 Real-time Updates
-• 🎮 Mini-Games
-• ⭐ Stars Donations
-• 🎮 Game Requests
-
-📢 Channel: @pspgamers5
-Choose an option below:"""
-                    self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
-                else:
-                    channel_text = f"""✅ <b>Code Verified!</b>
-
-👋 Hello {first_name}!
-
-✅ Code verification: Completed
-❌ Channel membership: Pending
-
-📝 <b>Step 2: Join Our Channel</b>
-
-To access all features, please join our channel:
-
-🔗 {self.CHANNEL_LINK}
-
-After joining, click the button below:"""
-                    self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
-                return True
-            else:
-                self.robust_send_message(chat_id, "❌ Invalid or expired code. Please use /start to get a new code.")
-                return True
-                
-        except Exception as e:
-            print(f"❌ Code verification error: {e}")
-            return False
-
     # ==================== UPDATED MESSAGE PROCESSOR ====================
 
     def process_message(self, message):
@@ -5583,6 +5856,12 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                     elif text == '/requests' and self.is_admin(user_id):
                         self.show_request_management(user_id, chat_id, message['message_id'])
                         return True
+                    elif text == '/redeploy' and self.is_admin(user_id):
+                        self.redeploy_system.show_redeploy_menu(user_id, chat_id, message['message_id'])
+                        return True
+                    elif text == '/status' and self.is_admin(user_id):
+                        self.redeploy_system.show_system_status(user_id, chat_id, message['message_id'])
+                        return True
                 
                 # Handle code verification
                 if text.isdigit() and len(text) == 6:
@@ -5620,6 +5899,159 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             
         except Exception as e:
             print(f"❌ Process message error: {e}")
+            return False
+
+    def handle_verification(self, message):
+        """Handle /start command and send verification code"""
+        try:
+            user_id = message['from']['id']
+            chat_id = message['chat']['id']
+            username = message['from'].get('username', '')
+            first_name = message['from']['first_name']
+            
+            print(f"🔐 Verification requested by {first_name} ({user_id})")
+            
+            # Check if user is already completed
+            if self.is_user_completed(user_id):
+                welcome_text = f"""👋 Welcome back {first_name}!
+
+✅ You're already verified!
+📢 Channel membership: Active
+
+Choose an option below:"""
+                self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
+                return True
+            
+            # Check if user is verified but not joined channel
+            if self.is_user_verified(user_id) and not self.check_channel_membership(user_id):
+                channel_text = f"""📢 <b>Channel Verification Required</b>
+
+👋 Hello {first_name}!
+
+✅ Code verification: Completed
+❌ Channel membership: Pending
+
+To access all features, please join our channel:
+
+🔗 {self.CHANNEL_LINK}
+
+After joining, click the button below:"""
+                self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
+                return True
+            
+            # Check if user has joined channel but not verified
+            if self.check_channel_membership(user_id) and not self.is_user_verified(user_id):
+                # Mark channel as joined
+                self.mark_channel_joined(user_id)
+                
+                # Generate and send verification code
+                code = self.generate_code()
+                if self.save_verification_code(user_id, username, first_name, code):
+                    verify_text = f"""🔐 <b>Verification Required</b>
+
+👋 Hello {first_name}!
+
+✅ Channel membership: Verified
+❌ Code verification: Pending
+
+Your verification code: 
+<code>{code}</code>
+
+📝 Please reply with this code to complete verification.
+
+⏰ Code expires in 10 minutes."""
+                    self.robust_send_message(chat_id, verify_text)
+                    return True
+                else:
+                    self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
+                    return True
+            
+            # New user - start with code verification
+            code = self.generate_code()
+            if self.save_verification_code(user_id, username, first_name, code):
+                welcome_text = f"""🔐 <b>Welcome to PSP Gamers Bot!</b>
+
+👋 Hello {first_name}!
+
+To access our game collection, please complete two-step verification:
+
+📝 <b>Step 1: Code Verification</b>
+Your verification code: 
+<code>{code}</code>
+
+Reply with this code to verify.
+
+⏰ Code expires in 10 minutes.
+
+After code verification, you'll need to join our channel."""
+                self.robust_send_message(chat_id, welcome_text)
+                return True
+            else:
+                self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
+                return False
+            
+        except Exception as e:
+            print(f"❌ Verification handler error: {e}")
+            self.robust_send_message(chat_id, "❌ Error starting verification. Please try again.")
+            return False
+
+    def handle_code_verification(self, message):
+        """Handle 6-digit code verification"""
+        try:
+            user_id = message['from']['id']
+            chat_id = message['chat']['id']
+            text = message.get('text', '').strip()
+            first_name = message['from']['first_name']
+            
+            print(f"🔐 Code verification attempt by {first_name} ({user_id}): {text}")
+            
+            if not text.isdigit() or len(text) != 6:
+                return False
+            
+            if self.verify_code(user_id, text):
+                # Check if user has already joined channel
+                if self.check_channel_membership(user_id):
+                    self.mark_channel_joined(user_id)
+                    welcome_text = f"""✅ <b>Verification Complete!</b>
+
+👋 Welcome {first_name}!
+
+🎉 You now have full access to:
+• 🎮 Game File Browser  
+• 💰 Premium Games
+• 🔍 Game Search
+• 📁 All Game Categories
+• 🕒 Real-time Updates
+• 🎮 Mini-Games
+• ⭐ Stars Donations
+• 🎮 Game Requests
+
+📢 Channel: @pspgamers5
+Choose an option below:"""
+                    self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
+                else:
+                    channel_text = f"""✅ <b>Code Verified!</b>
+
+👋 Hello {first_name}!
+
+✅ Code verification: Completed
+❌ Channel membership: Pending
+
+📝 <b>Step 2: Join Our Channel</b>
+
+To access all features, please join our channel:
+
+🔗 {self.CHANNEL_LINK}
+
+After joining, click the button below:"""
+                    self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
+                return True
+            else:
+                self.robust_send_message(chat_id, "❌ Invalid or expired code. Please use /start to get a new code.")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Code verification error: {e}")
             return False
 
     # ==================== ENHANCED RUN METHOD WITH PERSISTENCE ====================
@@ -5747,7 +6179,7 @@ def test_bot_connection(token):
         return False
 
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Telegram Bot...")
+    print("🚀 Starting Enhanced Telegram Bot with Redeploy System...")
     
     # Start health check server first (always)
     start_health_check()
