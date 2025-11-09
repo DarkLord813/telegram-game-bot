@@ -2,7 +2,7 @@
 version: "1"
 services:
 - type: web
-  name: telegram-game-bot-1
+  name: telegram-game-bot
   runtime: python
   repo: https://github.com/DarkLord813/telegram-game-bot
   plan: free
