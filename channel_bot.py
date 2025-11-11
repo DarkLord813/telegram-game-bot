@@ -13,15 +13,9 @@ from threading import Thread
 import traceback
 import base64
 from io import BytesIO
-
-# PostgreSQL support
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    POSTGRES_AVAILABLE = True
-except ImportError:
-    POSTGRES_AVAILABLE = False
-    print("⚠️ psycopg2 not installed, falling back to SQLite")
+import hashlib
+import hmac
+import subprocess
 
 print("TELEGRAM BOT - CROSS PLATFORM")
 print("Code Verification + Channel Join + Game Scanner")
@@ -35,6 +29,7 @@ print("Enhanced Broadcast with Photos")
 print("Individual Game Request Replies")
 print("Game Removal System with Duplicate Detection")
 print("Redeploy System for Admins and Users")
+print("GitHub Database Backup & Restore System")
 print("24/7 Operation with Persistent Data Recovery")
 print("=" * 50)
 
@@ -282,6 +277,192 @@ class EnhancedKeepAliveService:
         """Stop keep-alive service"""
         self.is_running = False
         print("🛑 Keep-alive service stopped")
+
+# ==================== GITHUB BACKUP SYSTEM ====================
+
+class GitHubBackupSystem:
+    def __init__(self, bot_instance):
+        self.bot = bot_instance
+        self.setup_github_config()
+        print("✅ GitHub Backup system initialized!")
+    
+    def setup_github_config(self):
+        """Setup GitHub configuration from environment variables"""
+        self.github_token = os.environ.get('GITHUB_TOKEN')
+        self.repo_owner = os.environ.get('GITHUB_REPO_OWNER', 'your-username')
+        self.repo_name = os.environ.get('GITHUB_REPO_NAME', 'your-repo')
+        self.backup_branch = os.environ.get('GITHUB_BACKUP_BRANCH', 'main')
+        self.backup_path = os.environ.get('GITHUB_BACKUP_PATH', 'backups/telegram_bot.db')
+        
+        self.is_enabled = bool(self.github_token and self.repo_owner and self.repo_name)
+        
+        if self.is_enabled:
+            print(f"✅ GitHub Backup: Enabled for {self.repo_owner}/{self.repo_name}")
+            print(f"📁 Backup path: {self.backup_path}")
+        else:
+            print("⚠️ GitHub Backup: Disabled - Set GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME")
+    
+    def create_db_backup(self):
+        """Create a backup of the current database"""
+        try:
+            db_path = self.bot.get_db_path()
+            backup_path = db_path + '.backup'
+            
+            # Copy database file
+            import shutil
+            shutil.copy2(db_path, backup_path)
+            
+            print(f"✅ Database backup created: {backup_path}")
+            return backup_path
+        except Exception as e:
+            print(f"❌ Database backup error: {e}")
+            return None
+    
+    def backup_database_to_github(self, commit_message="Auto backup: Database update"):
+        """Backup database to GitHub"""
+        if not self.is_enabled:
+            print("⚠️ GitHub backup disabled")
+            return False
+        
+        try:
+            print("🔄 Starting GitHub database backup...")
+            
+            # Create local backup
+            backup_file = self.create_db_backup()
+            if not backup_file:
+                return False
+            
+            # Read database file
+            with open(backup_file, 'rb') as f:
+                db_content = f.read()
+            
+            # Encode to base64
+            db_b64 = base64.b64encode(db_content).decode('utf-8')
+            
+            # Get current file SHA if exists
+            file_sha = self.get_file_sha()
+            
+            # Prepare API request
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
+            
+            headers = {
+                'Authorization': f'token {self.github_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            data = {
+                'message': commit_message,
+                'content': db_b64,
+                'branch': self.backup_branch
+            }
+            
+            if file_sha:
+                data['sha'] = file_sha
+            
+            # Upload to GitHub
+            response = requests.put(url, headers=headers, json=data, timeout=30)
+            
+            if response.status_code in [200, 201]:
+                result = response.json()
+                print(f"✅ Database backed up to GitHub: {result['commit']['html_url']}")
+                
+                # Clean up local backup
+                try:
+                    os.remove(backup_file)
+                except:
+                    pass
+                
+                return True
+            else:
+                print(f"❌ GitHub backup failed: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ GitHub backup error: {e}")
+            return False
+    
+    def get_file_sha(self):
+        """Get the SHA of the existing backup file on GitHub"""
+        try:
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
+            headers = {
+                'Authorization': f'token {self.github_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()['sha']
+            return None
+        except:
+            return None
+    
+    def restore_database_from_github(self):
+        """Restore database from GitHub backup"""
+        if not self.is_enabled:
+            print("⚠️ GitHub restore disabled")
+            return False
+        
+        try:
+            print("🔄 Restoring database from GitHub...")
+            
+            # Download database from GitHub
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
+            headers = {
+                'Authorization': f'token {self.github_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code != 200:
+                print(f"❌ No backup found on GitHub: {response.status_code}")
+                return False
+            
+            file_data = response.json()
+            db_content = base64.b64decode(file_data['content'])
+            
+            # Save to database file
+            db_path = self.bot.get_db_path()
+            with open(db_path, 'wb') as f:
+                f.write(db_content)
+            
+            print(f"✅ Database restored from GitHub backup")
+            print(f"📊 Backup date: {file_data['commit']['commit']['author']['date']}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ GitHub restore error: {e}")
+            return False
+    
+    def get_backup_info(self):
+        """Get information about the latest backup"""
+        if not self.is_enabled:
+            return {"enabled": False}
+        
+        try:
+            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/commits?path={self.backup_path}&per_page=1"
+            headers = {
+                'Authorization': f'token {self.github_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                commits = response.json()
+                if commits:
+                    latest_commit = commits[0]
+                    return {
+                        "enabled": True,
+                        "last_backup": latest_commit['commit']['author']['date'],
+                        "message": latest_commit['commit']['message'],
+                        "url": latest_commit['html_url'],
+                        "size": "unknown"
+                    }
+            
+            return {"enabled": True, "last_backup": "Never"}
+        except Exception as e:
+            return {"enabled": True, "error": str(e)}
 
 # ==================== REDEPLOY SYSTEM ====================
 
@@ -534,8 +715,8 @@ class TelegramStarsSystem:
             # Stars transactions table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_transactions (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     user_name TEXT,
                     stars_amount INTEGER,
                     usd_amount REAL,
@@ -543,25 +724,25 @@ class TelegramStarsSystem:
                     telegram_star_amount INTEGER,
                     transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
                 )
             ''')
             
             # Stars balance table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_balance (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     total_stars_earned INTEGER DEFAULT 0,
                     total_usd_earned REAL DEFAULT 0.0,
                     available_stars INTEGER DEFAULT 0,
                     available_usd REAL DEFAULT 0.0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Initialize balance if not exists
-            cursor.execute('INSERT INTO stars_balance (id) VALUES (1) ON CONFLICT (id) DO NOTHING')
+            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
             
             self.bot.conn.commit()
             print("✅ Telegram Stars database setup complete!")
@@ -609,7 +790,7 @@ class TelegramStarsSystem:
                 cursor.execute('''
                     INSERT INTO stars_transactions 
                     (user_id, user_name, stars_amount, usd_amount, description, transaction_id, payment_status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     user_id,
                     self.bot.get_user_info(user_id)['first_name'],
@@ -668,7 +849,7 @@ class TelegramStarsSystem:
                 cursor.execute('''
                     INSERT INTO premium_purchases 
                     (user_id, game_id, stars_paid, transaction_id, status)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?)
                 ''', (user_id, game_id, stars_amount, invoice_payload, 'pending'))
                 
                 self.bot.conn.commit()
@@ -712,7 +893,7 @@ class TelegramStarsSystem:
                 SELECT user_name, stars_amount, usd_amount, payment_status, created_at 
                 FROM stars_transactions 
                 ORDER BY created_at DESC 
-                LIMIT %s
+                LIMIT ?
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -726,23 +907,23 @@ class TelegramStarsSystem:
             cursor.execute('''
                 UPDATE premium_purchases 
                 SET status = 'completed' 
-                WHERE transaction_id = %s
+                WHERE transaction_id = ?
             ''', (transaction_id,))
             
             # Update stars balance
             cursor.execute('''
                 UPDATE stars_balance 
                 SET total_stars_earned = total_stars_earned + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = %s
+                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
                 ),
                 total_usd_earned = total_usd_earned + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = %s
+                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
                 ),
                 available_stars = available_stars + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = %s
+                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
                 ),
                 available_usd = available_usd + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = %s
+                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
                 ),
                 last_updated = CURRENT_TIMESTAMP
                 WHERE id = 1
@@ -769,27 +950,27 @@ class GameRequestSystem:
             # Game requests table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_requests (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     user_name TEXT,
                     game_name TEXT,
                     platform TEXT,
                     status TEXT DEFAULT 'pending',
                     admin_notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game request replies table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_request_replies (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     request_id INTEGER,
-                    admin_id BIGINT,
+                    admin_id INTEGER,
                     reply_text TEXT,
                     photo_file_id TEXT,
-                    reply_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reply_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (request_id) REFERENCES game_requests (id)
                 )
             ''')
@@ -810,7 +991,7 @@ class GameRequestSystem:
             cursor.execute('''
                 INSERT INTO game_requests 
                 (user_id, user_name, game_name, platform, status)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
             ''', (user_id, user_name, game_name, platform, 'pending'))
             
             self.bot.conn.commit()
@@ -835,7 +1016,7 @@ class GameRequestSystem:
                 FROM game_requests 
                 WHERE status = 'pending' 
                 ORDER BY created_at DESC 
-                LIMIT %s
+                LIMIT ?
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -849,9 +1030,9 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT id, game_name, platform, status, created_at 
                 FROM game_requests 
-                WHERE user_id = %s 
+                WHERE user_id = ? 
                 ORDER BY created_at DESC 
-                LIMIT %s
+                LIMIT ?
             ''', (user_id, limit))
             return cursor.fetchall()
         except Exception as e:
@@ -865,7 +1046,7 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT id, user_id, user_name, game_name, platform, status, admin_notes, created_at
                 FROM game_requests 
-                WHERE id = %s
+                WHERE id = ?
             ''', (request_id,))
             result = cursor.fetchone()
             
@@ -891,8 +1072,8 @@ class GameRequestSystem:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
                 UPDATE game_requests 
-                SET status = %s, admin_notes = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
+                SET status = ?, admin_notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
             ''', (status, admin_notes, request_id))
             
             self.bot.conn.commit()
@@ -908,7 +1089,7 @@ class GameRequestSystem:
             cursor.execute('''
                 INSERT INTO game_request_replies 
                 (request_id, admin_id, reply_text, photo_file_id)
-                VALUES (%s, %s, %s, %s)
+                VALUES (?, ?, ?, ?)
             ''', (request_id, admin_id, reply_text, photo_file_id))
             
             self.bot.conn.commit()
@@ -924,7 +1105,7 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT admin_id, reply_text, photo_file_id, reply_date
                 FROM game_request_replies 
-                WHERE request_id = %s
+                WHERE request_id = ?
                 ORDER BY reply_date ASC
             ''', (request_id,))
             return cursor.fetchall()
@@ -973,19 +1154,19 @@ class PremiumGamesSystem:
             # Premium games table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_games (
-                    id SERIAL PRIMARY KEY,
-                    message_id BIGINT UNIQUE,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date TIMESTAMP,
+                    upload_date DATETIME,
                     category TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    added_by BIGINT DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    added_by INTEGER DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id BIGINT,
+                    bot_message_id INTEGER,
                     stars_price INTEGER DEFAULT 0,
                     description TEXT,
                     is_premium INTEGER DEFAULT 1
@@ -995,11 +1176,11 @@ class PremiumGamesSystem:
             # Premium game purchases table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_purchases (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     game_id INTEGER,
                     stars_paid INTEGER,
-                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                     transaction_id TEXT,
                     status TEXT DEFAULT 'completed'
                 )
@@ -1019,7 +1200,7 @@ class PremiumGamesSystem:
                 INSERT INTO premium_games 
                 (message_id, file_name, file_type, file_size, upload_date, category, 
                  added_by, is_uploaded, is_forwarded, file_id, bot_message_id, stars_price, description, is_premium)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 game_info['message_id'],
                 game_info['file_name'],
@@ -1052,7 +1233,7 @@ class PremiumGamesSystem:
                 FROM premium_games 
                 WHERE is_premium = 1
                 ORDER BY created_at DESC 
-                LIMIT %s
+                LIMIT ?
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -1067,7 +1248,7 @@ class PremiumGamesSystem:
                 SELECT id, file_name, file_type, file_size, stars_price, description, 
                        file_id, bot_message_id, is_uploaded, message_id
                 FROM premium_games 
-                WHERE id = %s
+                WHERE id = ?
             ''', (game_id,))
             result = cursor.fetchone()
             
@@ -1095,7 +1276,7 @@ class PremiumGamesSystem:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
                 SELECT id FROM premium_purchases 
-                WHERE user_id = %s AND game_id = %s AND status = 'completed'
+                WHERE user_id = ? AND game_id = ? AND status = 'completed'
             ''', (user_id, game_id))
             return cursor.fetchone() is not None
         except Exception as e:
@@ -1109,7 +1290,7 @@ class PremiumGamesSystem:
             cursor.execute('''
                 INSERT INTO premium_purchases 
                 (user_id, game_id, stars_paid, transaction_id, status)
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?)
             ''', (user_id, game_id, stars_paid, transaction_id, 'completed'))
             
             self.bot.conn.commit()
@@ -1147,11 +1328,12 @@ class CrossPlatformBot:
         self.broadcast_sessions = {}  # {admin_id: {'stage': 'waiting_message', 'message': '', 'photo': None}}
         self.broadcast_stats = {}     # Store broadcast statistics
         
-        # Stars, request, and redeploy systems
+        # Stars, request, redeploy, and backup systems
         self.stars_system = TelegramStarsSystem(self)
         self.game_request_system = GameRequestSystem(self)
         self.premium_games_system = PremiumGamesSystem(self)
         self.redeploy_system = RedeploySystem(self)
+        self.github_backup = GitHubBackupSystem(self)  # NEW: GitHub backup system
         
         # Session management
         self.stars_sessions = {}  # {user_id: {'stars_amount': amount}}
@@ -1193,14 +1375,23 @@ class CrossPlatformBot:
         print("🗑️ Game removal system enabled")
         print("🛡️ Duplicate detection enabled")
         print("🔄 Redeploy system enabled")
+        print("💾 GitHub Database Backup & Restore enabled")
         print("🛡️  Crash protection enabled")
         print("🔋 Enhanced keep-alive system ready")
         print("💾 Persistent data recovery enabled")
     
     def initialize_with_persistence(self):
-        """Initialize bot with persistent data recovery"""
+        """Initialize bot with persistent data recovery including GitHub restore"""
         try:
             print("🔄 Initializing bot with persistence...")
+            
+            # Try to restore from GitHub first
+            if self.github_backup.is_enabled:
+                print("🔍 Checking for GitHub backup...")
+                if self.github_backup.restore_database_from_github():
+                    print("✅ Database restored from GitHub")
+                else:
+                    print("ℹ️ No GitHub backup found or restore failed, using local database")
             
             # Ensure database is properly set up
             self.setup_database()
@@ -1329,6 +1520,185 @@ class CrossPlatformBot:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
 
+    # ==================== GITHUB BACKUP INTEGRATION ====================
+
+    def backup_after_game_action(self, action_type, game_name=""):
+        """Trigger backup after game-related actions"""
+        if not self.github_backup.is_enabled:
+            return
+        
+        def async_backup():
+            try:
+                commit_message = f"Auto backup: {action_type}"
+                if game_name:
+                    commit_message += f" - {game_name}"
+                
+                success = self.github_backup.backup_database_to_github(commit_message)
+                if success:
+                    print(f"✅ Automatic backup completed for: {action_type}")
+                else:
+                    print(f"⚠️ Automatic backup failed for: {action_type}")
+            except Exception as e:
+                print(f"❌ Backup thread error: {e}")
+        
+        # Start backup in background thread
+        backup_thread = threading.Thread(target=async_backup, daemon=True)
+        backup_thread.start()
+
+    def show_backup_menu(self, user_id, chat_id, message_id):
+        """Show backup management menu for admins"""
+        if not self.is_admin(user_id):
+            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
+            return
+        
+        backup_info = self.github_backup.get_backup_info()
+        
+        if backup_info.get('enabled'):
+            if 'last_backup' in backup_info:
+                status_text = f"""💾 <b>GitHub Backup System</b>
+
+✅ Status: <b>ENABLED</b>
+📅 Last Backup: {backup_info.get('last_backup', 'Unknown')}
+💬 Message: {backup_info.get('message', 'Unknown')}
+🔗 Repository: {self.github_backup.repo_owner}/{self.github_backup.repo_name}
+📁 Path: {self.github_backup.backup_path}
+
+🔄 Backup occurs automatically when:
+• Games are uploaded
+• Games are removed  
+• All games are cleared
+• Manual backup triggered"""
+            else:
+                status_text = f"""💾 <b>GitHub Backup System</b>
+
+✅ Status: <b>ENABLED</b>
+❌ Last Backup: Never (No backup exists yet)
+🔗 Repository: {self.github_backup.repo_owner}/{self.github_backup.repo_name}
+📁 Path: {self.github_backup.backup_path}
+
+⚠️ <b>No backup exists yet!</b>
+Create your first backup now."""
+        else:
+            status_text = """💾 <b>GitHub Backup System</b>
+
+❌ Status: <b>DISABLED</b>
+
+To enable GitHub backups, set these environment variables:
+• <code>GITHUB_TOKEN</code> - Your GitHub personal access token
+• <code>GITHUB_REPO_OWNER</code> - Repository owner username
+• <code>GITHUB_REPO_NAME</code> - Repository name
+• <code>GITHUB_BACKUP_PATH</code> - Backup file path (optional)
+• <code>GITHUB_BACKUP_BRANCH</code> - Branch name (optional)"""
+
+        keyboard = {
+            "inline_keyboard": []
+        }
+        
+        if backup_info.get('enabled'):
+            keyboard["inline_keyboard"].extend([
+                [{"text": "💾 Create Backup Now", "callback_data": "create_backup"}],
+                [{"text": "🔄 Restore from Backup", "callback_data": "restore_backup"}],
+                [{"text": "📊 Backup Info", "callback_data": "backup_info"}]
+            ])
+        
+        keyboard["inline_keyboard"].append([{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}])
+        
+        self.edit_message(chat_id, message_id, status_text, keyboard)
+
+    def handle_create_backup(self, user_id, chat_id, message_id):
+        """Handle manual backup creation"""
+        if not self.is_admin(user_id):
+            return False
+        
+        self.edit_message(chat_id, message_id, "💾 Creating manual backup...", None)
+        
+        def backup_operation():
+            success = self.github_backup.backup_database_to_github("Manual backup: Admin triggered")
+            
+            if success:
+                result_text = "✅ <b>Backup Created Successfully!</b>\n\nYour database has been backed up to GitHub."
+            else:
+                result_text = "❌ <b>Backup Failed!</b>\n\nCheck the logs for more information."
+            
+            self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+        
+        # Run backup in background thread
+        backup_thread = threading.Thread(target=backup_operation, daemon=True)
+        backup_thread.start()
+        
+        return True
+
+    def handle_restore_backup(self, user_id, chat_id, message_id):
+        """Handle backup restoration with confirmation"""
+        if not self.is_admin(user_id):
+            return False
+        
+        backup_info = self.github_backup.get_backup_info()
+        
+        if not backup_info.get('enabled'):
+            self.edit_message(chat_id, message_id, "❌ GitHub backup is not enabled.", self.create_admin_buttons())
+            return False
+        
+        if backup_info.get('last_backup') == 'Never':
+            self.edit_message(chat_id, message_id, "❌ No backup exists to restore.", self.create_admin_buttons())
+            return False
+        
+        confirm_text = f"""⚠️ <b>Restore Database from Backup?</b>
+
+This will replace your current database with the backup from GitHub.
+
+📅 Backup Date: {backup_info.get('last_backup', 'Unknown')}
+💬 Message: {backup_info.get('message', 'Unknown')}
+
+❌ <b>This action cannot be undone!</b>
+All current data will be replaced with the backup.
+
+Are you sure you want to continue?"""
+        
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Yes, Restore Backup", "callback_data": "confirm_restore_backup"},
+                    {"text": "❌ Cancel", "callback_data": "backup_menu"}
+                ]
+            ]
+        }
+        
+        self.edit_message(chat_id, message_id, confirm_text, keyboard)
+        return True
+
+    def handle_confirm_restore(self, user_id, chat_id, message_id):
+        """Handle confirmed backup restoration"""
+        if not self.is_admin(user_id):
+            return False
+        
+        self.edit_message(chat_id, message_id, "🔄 Restoring database from GitHub backup...", None)
+        
+        def restore_operation():
+            success = self.github_backup.restore_database_from_github()
+            
+            if success:
+                # Reinitialize bot with restored database
+                self.setup_database()
+                self.verify_database_schema()
+                self.update_games_cache()
+                
+                result_text = """✅ <b>Database Restored Successfully!</b>
+
+Your database has been restored from the GitHub backup.
+
+The bot will now use the restored data."""
+            else:
+                result_text = "❌ <b>Restore Failed!</b>\n\nCheck the logs for more information."
+            
+            self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+        
+        # Run restore in background thread
+        restore_thread = threading.Thread(target=restore_operation, daemon=True)
+        restore_thread.start()
+        
+        return True
+
     # ==================== REDEPLOY SYSTEM INTEGRATION ====================
     
     def create_main_menu_buttons(self):
@@ -1386,7 +1756,11 @@ class CrossPlatformBot:
                 ],
                 [
                     {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
-                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"}
+                    {"text": "💾 Backup System", "callback_data": "backup_menu"}  # NEW: Backup menu
+                ],
+                [
+                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"},
+                    {"text": "📊 System Status", "callback_data": "system_status"}
                 ],
                 [
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
@@ -1495,6 +1869,42 @@ If the issue persists, please contact the admins directly."""
             
             self.answer_callback_query(callback_query['id'])
             
+            # Backup System Callbacks
+            if data == "backup_menu":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.show_backup_menu(user_id, chat_id, message_id)
+                return
+                
+            elif data == "create_backup":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.handle_create_backup(user_id, chat_id, message_id)
+                return
+                
+            elif data == "restore_backup":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.handle_restore_backup(user_id, chat_id, message_id)
+                return
+                
+            elif data == "confirm_restore_backup":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.handle_confirm_restore(user_id, chat_id, message_id)
+                return
+                
+            elif data == "backup_info":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    return
+                self.show_backup_menu(user_id, chat_id, message_id)  # Refresh info
+                return
+
             # Redeploy System Callbacks
             if data == "redeploy_panel":
                 if not self.is_admin(user_id):
@@ -2046,6 +2456,7 @@ Have fun! 🎉"""
 • 🗑️ Game Removal System
 • 🛡️ Duplicate Detection
 • 🔄 Redeploy System
+• 💾 GitHub Database Backup
 • 🔋 Keep-Alive Protection
 • 💾 Persistent Data Recovery
 
@@ -2099,6 +2510,7 @@ Choose an option below:"""
 • 📢 Broadcast messages to users
 • 🎮 Manage game requests
 • ⭐ View Stars statistics
+• 💾 Backup & Restore Database
 • 🔄 Redeploy bot system
 • 🔍 Monitor system status
 
@@ -2132,6 +2544,302 @@ Choose an option:"""
         except Exception as e:
             print(f"Callback error: {e}")
 
+    # ==================== ENHANCED DATABASE OPERATIONS WITH BACKUP ====================
+
+    def handle_document_upload(self, message):
+        try:
+            user_id = message['from']['id']
+            chat_id = message['chat']['id']
+            
+            if not self.is_admin(user_id):
+                print(f"❌ Non-admin user {user_id} attempted upload")
+                return False
+            
+            if 'document' not in message:
+                print("❌ No document in message")
+                return False
+            
+            # Check if this is a premium game upload
+            if user_id in self.upload_sessions and self.upload_sessions[user_id]['type'] == 'premium':
+                result = self.handle_premium_document_upload(message)
+                if result:
+                    # Trigger backup for premium game upload
+                    file_name = message['document'].get('file_name', 'Unknown')
+                    self.backup_after_game_action("Premium Game Upload", file_name)
+                return result
+            
+            # Regular game upload
+            doc = message['document']
+            file_name = doc.get('file_name', 'Unknown File')
+            file_size = doc.get('file_size', 0)
+            file_id = doc.get('file_id', '')
+            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
+            bot_message_id = message['message_id']
+            
+            print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
+            
+            # Check for duplicates
+            regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
+            
+            if regular_duplicate or premium_duplicate:
+                duplicate_text = f"""⚠️ <b>Duplicate Game Detected!</b>
+
+📁 File: <code>{file_name}</code>
+📏 Size: {self.format_file_size(file_size)}
+📦 Type: {file_type}
+
+This game already exists in the database:"""
+                
+                if regular_duplicate:
+                    dup_msg_id, dup_file_name = regular_duplicate
+                    duplicate_text += f"\n\n🆓 <b>Regular Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Message ID: {dup_msg_id}"
+                
+                if premium_duplicate:
+                    dup_id, dup_file_name = premium_duplicate
+                    duplicate_text += f"\n\n💰 <b>Premium Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Game ID: {dup_id}"
+                
+                duplicate_text += "\n\n❌ Upload cancelled. Please upload a different file."
+                
+                # Clean up session
+                if user_id in self.upload_sessions:
+                    del self.upload_sessions[user_id]
+                
+                self.robust_send_message(chat_id, duplicate_text)
+                return True
+            
+            # Check if it's a supported game file
+            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+            if not any(file_name.lower().endswith(ext) for ext in game_extensions):
+                self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
+                print(f"❌ Unsupported file type: {file_name}")
+                return False
+            
+            upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Determine if this is a forwarded file
+            is_forwarded = 'forward_origin' in message
+            forward_info = ""
+            original_message_id = None
+            
+            if is_forwarded:
+                forward_origin = message['forward_origin']
+                if 'sender_user' in forward_origin:
+                    forward_user = forward_origin['sender_user']
+                    forward_name = forward_user.get('first_name', 'Unknown')
+                    forward_info = f"\n🔄 Forwarded from: {forward_name}"
+                elif 'chat' in forward_origin:
+                    forward_chat = forward_origin['chat']
+                    forward_title = forward_chat.get('title', 'Unknown Chat')
+                    forward_info = f"\n🔄 Forwarded from: {forward_title}"
+                
+                # Get original message ID for channel forwards
+                if 'chat' in forward_origin and forward_origin['chat']['type'] == 'channel':
+                    original_message_id = message.get('forward_from_message_id')
+                    print(f"📨 Forwarded from channel, original message ID: {original_message_id}")
+            
+            # Generate unique message ID for storage
+            if original_message_id:
+                storage_message_id = original_message_id
+            else:
+                # For bot-uploaded files, create a unique ID
+                storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
+            
+            # Prepare game info
+            game_info = {
+                'message_id': storage_message_id,
+                'file_name': file_name,
+                'file_type': file_type,
+                'file_size': file_size,
+                'upload_date': upload_date,
+                'category': self.determine_file_category(file_name),
+                'added_by': user_id,
+                'is_uploaded': 1,  # Mark as uploaded by admin
+                'is_forwarded': 1 if is_forwarded else 0,
+                'file_id': file_id,
+                'bot_message_id': bot_message_id  # Store the actual bot message ID
+            }
+            
+            # Store in database
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO channel_games 
+                (message_id, file_name, file_type, file_size, upload_date, category, 
+                 added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                game_info['message_id'],
+                game_info['file_name'],
+                game_info['file_type'],
+                game_info['file_size'],
+                game_info['upload_date'],
+                game_info['category'],
+                game_info['added_by'],
+                game_info['is_uploaded'],
+                game_info['is_forwarded'],
+                game_info['file_id'],
+                game_info['bot_message_id']
+            ))
+            self.conn.commit()
+            
+            # Update cache
+            self.update_games_cache()
+            
+            # Send confirmation
+            size = self.format_file_size(file_size)
+            source_type = "Channel Forward" if original_message_id else "Direct Upload"
+            
+            confirm_text = f"""✅ Game file added successfully!{forward_info}
+
+📁 File: <code>{file_name}</code>
+📦 Type: {file_type}
+📏 Size: {size}
+🗂️ Category: {game_info['category']}
+🕒 Added: {upload_date}
+📮 Source: {source_type}
+🆔 Storage ID: {storage_message_id}
+🤖 Bot Message ID: {bot_message_id}
+
+The file is now available in the games browser and search!"""
+            
+            self.robust_send_message(chat_id, confirm_text)
+            
+            # Trigger backup after successful upload
+            self.backup_after_game_action("Regular Game Upload", file_name)
+            
+            print(f"✅ Successfully stored: {file_name} (Storage ID: {storage_message_id}, Bot Message ID: {bot_message_id})")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Upload error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def remove_game(self, user_id, chat_id, game_type, game_id, message_id=None):
+        """Remove a game from database with backup"""
+        try:
+            if not self.is_admin(user_id):
+                return False
+            
+            cursor = self.conn.cursor()
+            game_name = ""
+            
+            if game_type == 'R':  # Regular game
+                # Get game info before deletion
+                cursor.execute('SELECT file_name FROM channel_games WHERE message_id = ?', (game_id,))
+                game_info = cursor.fetchone()
+                
+                if not game_info:
+                    self.answer_callback_query(message_id, "❌ Game not found.", True)
+                    return False
+                
+                game_name = game_info[0]
+                
+                # Delete the game
+                cursor.execute('DELETE FROM channel_games WHERE message_id = ?', (game_id,))
+                self.conn.commit()
+                
+            elif game_type == 'P':  # Premium game
+                # Get game info before deletion
+                cursor.execute('SELECT file_name FROM premium_games WHERE id = ?', (game_id,))
+                game_info = cursor.fetchone()
+                
+                if not game_info:
+                    self.answer_callback_query(message_id, "❌ Premium game not found.", True)
+                    return False
+                
+                game_name = game_info[0]
+                
+                # Delete the game and associated purchases
+                cursor.execute('DELETE FROM premium_games WHERE id = ?', (game_id,))
+                cursor.execute('DELETE FROM premium_purchases WHERE game_id = ?', (game_id,))
+                self.conn.commit()
+            
+            else:
+                self.answer_callback_query(message_id, "❌ Invalid game type.", True)
+                return False
+            
+            # Update cache
+            self.update_games_cache()
+            
+            print(f"🗑️ Admin {user_id} removed {game_type} game: {game_name} (ID: {game_id})")
+            
+            # Trigger backup after removal
+            self.backup_after_game_action("Game Removal", game_name)
+            
+            result_text = f"✅ <b>{'Regular' if game_type == 'R' else 'Premium'} Game Removed</b>\n\n📁 <code>{game_name}</code>\n🆔 {game_id}\n\nGame has been removed from the database."
+            
+            if message_id:
+                self.edit_message(chat_id, message_id, result_text, self.create_admin_buttons())
+            else:
+                self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Remove game error: {e}")
+            self.answer_callback_query(message_id, "❌ Error removing game.", True)
+            return False
+
+    def clear_all_games(self, user_id, chat_id, message_id):
+        """Clear all games from database with backup"""
+        if not self.is_admin(user_id):
+            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
+            return
+        
+        try:
+            cursor = self.conn.cursor()
+            
+            # Count games before deletion
+            cursor.execute('SELECT COUNT(*) FROM channel_games')
+            total_games_before = cursor.fetchone()[0]
+            
+            cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1')
+            uploaded_games_before = cursor.fetchone()[0]
+            
+            # Count premium games
+            cursor.execute('SELECT COUNT(*) FROM premium_games')
+            premium_games_before = cursor.fetchone()[0]
+            
+            # Delete all games
+            cursor.execute('DELETE FROM channel_games')
+            cursor.execute('DELETE FROM premium_games')
+            self.conn.commit()
+            
+            # Update cache
+            self.update_games_cache()
+            
+            # Trigger backup after clearing all games
+            self.backup_after_game_action("Clear All Games", f"Removed {total_games_before} regular + {premium_games_before} premium games")
+            
+            clear_text = f"""🗑️ <b>All Games Cleared Successfully!</b>
+
+📊 Before clearing:
+• Total regular games: {total_games_before}
+• Admin uploaded: {uploaded_games_before}
+• Premium games: {premium_games_before}
+
+✅ After clearing:
+• All games removed from database
+• Cache updated
+• Backup created
+• Ready for fresh start
+
+🔄 You can now upload new games or rescan the channel."""
+            
+            self.edit_message(chat_id, message_id, clear_text, self.create_admin_buttons())
+            
+            print(f"🗑️ Admin {user_id} cleared all games from database")
+            
+        except Exception as e:
+            error_text = f"❌ Error clearing games: {str(e)}"
+            self.edit_message(chat_id, message_id, error_text, self.create_admin_buttons())
+            print(f"❌ Clear games error: {e}")
+
     # ==================== DUPLICATE DETECTION SYSTEM ====================
     
     def check_duplicate_game(self, file_name, file_size, file_type):
@@ -2142,14 +2850,14 @@ Choose an option:"""
             # Check in regular games
             cursor.execute('''
                 SELECT message_id, file_name FROM channel_games 
-                WHERE file_name = %s AND file_size = %s AND file_type = %s
+                WHERE file_name = ? AND file_size = ? AND file_type = ?
             ''', (file_name, file_size, file_type))
             regular_duplicate = cursor.fetchone()
             
             # Check in premium games
             cursor.execute('''
                 SELECT id, file_name FROM premium_games 
-                WHERE file_name = %s AND file_size = %s AND file_type = %s
+                WHERE file_name = ? AND file_size = ? AND file_type = ?
             ''', (file_name, file_size, file_type))
             premium_duplicate = cursor.fetchone()
             
@@ -2230,7 +2938,7 @@ Choose an option:"""
                 SELECT message_id, file_name, file_type, file_size, upload_date, category, 
                        file_id, bot_message_id, is_uploaded, is_forwarded
                 FROM channel_games 
-                WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
+                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
                 ORDER BY file_name
                 LIMIT 20
             ''', (f'%{search_term}%', f'%{search_term}%'))
@@ -2242,7 +2950,7 @@ Choose an option:"""
                 SELECT id, file_name, file_type, file_size, stars_price, description, 
                        upload_date, file_id, bot_message_id, is_uploaded
                 FROM premium_games 
-                WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
+                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
                 ORDER BY file_name
                 LIMIT 20
             ''', (f'%{search_term}%', f'%{search_term}%'))
@@ -2342,70 +3050,6 @@ Found: {len(all_results)} games
             self.robust_send_message(chat_id, "❌ Error searching for games. Please try again.")
             return False
 
-    def remove_game(self, user_id, chat_id, game_type, game_id, message_id=None):
-        """Remove a game from database"""
-        try:
-            if not self.is_admin(user_id):
-                return False
-            
-            cursor = self.conn.cursor()
-            
-            if game_type == 'R':  # Regular game
-                # Get game info before deletion
-                cursor.execute('SELECT file_name FROM channel_games WHERE message_id = %s', (game_id,))
-                game_info = cursor.fetchone()
-                
-                if not game_info:
-                    self.answer_callback_query(message_id, "❌ Game not found.", True)
-                    return False
-                
-                file_name = game_info[0]
-                
-                # Delete the game
-                cursor.execute('DELETE FROM channel_games WHERE message_id = %s', (game_id,))
-                self.conn.commit()
-                
-                # Update cache
-                self.update_games_cache()
-                
-                result_text = f"✅ <b>Regular Game Removed</b>\n\n📁 <code>{file_name}</code>\n🆔 {game_id}\n\nGame has been removed from the database."
-                
-            elif game_type == 'P':  # Premium game
-                # Get game info before deletion
-                cursor.execute('SELECT file_name FROM premium_games WHERE id = %s', (game_id,))
-                game_info = cursor.fetchone()
-                
-                if not game_info:
-                    self.answer_callback_query(message_id, "❌ Premium game not found.", True)
-                    return False
-                
-                file_name = game_info[0]
-                
-                # Delete the game and associated purchases
-                cursor.execute('DELETE FROM premium_games WHERE id = %s', (game_id,))
-                cursor.execute('DELETE FROM premium_purchases WHERE game_id = %s', (game_id,))
-                self.conn.commit()
-                
-                result_text = f"✅ <b>Premium Game Removed</b>\n\n📁 <code>{file_name}</code>\n🆔 {game_id}\n\nGame and all purchase records have been removed."
-            
-            else:
-                self.answer_callback_query(message_id, "❌ Invalid game type.", True)
-                return False
-            
-            print(f"🗑️ Admin {user_id} removed {game_type} game: {file_name} (ID: {game_id})")
-            
-            if message_id:
-                self.edit_message(chat_id, message_id, result_text, self.create_admin_buttons())
-            else:
-                self.robust_send_message(chat_id, result_text, self.create_admin_buttons())
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Remove game error: {e}")
-            self.answer_callback_query(message_id, "❌ Error removing game.", True)
-            return False
-
     def show_remove_confirmation(self, user_id, chat_id, message_id, game_type, game_id):
         """Show removal confirmation dialog"""
         if not self.is_admin(user_id):
@@ -2415,10 +3059,10 @@ Found: {len(all_results)} games
             cursor = self.conn.cursor()
             
             if game_type == 'R':
-                cursor.execute('SELECT file_name, file_size, file_type FROM channel_games WHERE message_id = %s', (game_id,))
+                cursor.execute('SELECT file_name, file_size, file_type FROM channel_games WHERE message_id = ?', (game_id,))
                 table_name = "channel_games"
             else:
-                cursor.execute('SELECT file_name, file_size, file_type FROM premium_games WHERE id = %s', (game_id,))
+                cursor.execute('SELECT file_name, file_size, file_type FROM premium_games WHERE id = ?', (game_id,))
                 table_name = "premium_games"
             
             game_info = cursor.fetchone()
@@ -2828,6 +3472,10 @@ This game already exists in the database:"""
 ⭐ The game is now available in the premium games section!"""
                 
                 self.robust_send_message(chat_id, confirm_text)
+                
+                # Trigger backup for premium game upload
+                self.backup_after_game_action("Premium Game Upload", file_name)
+                
                 print(f"✅ Premium game added: {file_name} for {session['stars_price']} Stars")
                 return True
             else:
@@ -3833,12 +4481,12 @@ Use the broadcast feature to send messages to all users."""
             cursor = self.conn.cursor()
             
             # Check if bot_message_id column exists
-            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='channel_games' AND column_name='bot_message_id'")
-            result = cursor.fetchone()
+            cursor.execute("PRAGMA table_info(channel_games)")
+            columns = [column[1] for column in cursor.fetchall()]
             
-            if not result:
+            if 'bot_message_id' not in columns:
                 print("🔄 Adding bot_message_id column to database...")
-                cursor.execute('ALTER TABLE channel_games ADD COLUMN bot_message_id BIGINT')
+                cursor.execute('ALTER TABLE channel_games ADD COLUMN bot_message_id INTEGER')
                 self.conn.commit()
                 print("✅ Database schema updated successfully!")
                 
@@ -4221,243 +4869,6 @@ Always available!
 
     # ==================== IMPROVED ADMIN GAME MANAGEMENT ====================
     
-    def clear_all_games(self, user_id, chat_id, message_id):
-        """Clear all games from database (admin only)"""
-        if not self.is_admin(user_id):
-            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
-            return
-        
-        try:
-            cursor = self.conn.cursor()
-            
-            # Count games before deletion
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            total_games_before = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1')
-            uploaded_games_before = cursor.fetchone()[0]
-            
-            # Count premium games
-            cursor.execute('SELECT COUNT(*) FROM premium_games')
-            premium_games_before = cursor.fetchone()[0]
-            
-            # Delete all games
-            cursor.execute('DELETE FROM channel_games')
-            cursor.execute('DELETE FROM premium_games')
-            self.conn.commit()
-            
-            # Update cache
-            self.update_games_cache()
-            
-            clear_text = f"""🗑️ <b>All Games Cleared Successfully!</b>
-
-📊 Before clearing:
-• Total regular games: {total_games_before}
-• Admin uploaded: {uploaded_games_before}
-• Premium games: {premium_games_before}
-
-✅ After clearing:
-• All games removed from database
-• Cache updated
-• Ready for fresh start
-
-🔄 You can now upload new games or rescan the channel."""
-            
-            self.edit_message(chat_id, message_id, clear_text, self.create_admin_buttons())
-            
-            print(f"🗑️ Admin {user_id} cleared all games from database")
-            
-        except Exception as e:
-            error_text = f"❌ Error clearing games: {str(e)}"
-            self.edit_message(chat_id, message_id, error_text, self.create_admin_buttons())
-            print(f"❌ Clear games error: {e}")
-
-    # ==================== IMPROVED DOCUMENT UPLOAD METHODS ====================
-    
-    def handle_document_upload(self, message):
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            
-            if not self.is_admin(user_id):
-                print(f"❌ Non-admin user {user_id} attempted upload")
-                return False
-            
-            if 'document' not in message:
-                print("❌ No document in message")
-                return False
-            
-            # Check if this is a premium game upload
-            if user_id in self.upload_sessions and self.upload_sessions[user_id]['type'] == 'premium':
-                return self.handle_premium_document_upload(message)
-            
-            # Regular game upload
-            doc = message['document']
-            file_name = doc.get('file_name', 'Unknown File')
-            file_size = doc.get('file_size', 0)
-            file_id = doc.get('file_id', '')
-            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
-            bot_message_id = message['message_id']
-            
-            print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
-            
-            # Check for duplicates
-            regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
-            
-            if regular_duplicate or premium_duplicate:
-                duplicate_text = f"""⚠️ <b>Duplicate Game Detected!</b>
-
-📁 File: <code>{file_name}</code>
-📏 Size: {self.format_file_size(file_size)}
-📦 Type: {file_type}
-
-This game already exists in the database:"""
-                
-                if regular_duplicate:
-                    dup_msg_id, dup_file_name = regular_duplicate
-                    duplicate_text += f"\n\n🆓 <b>Regular Game:</b>"
-                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
-                    duplicate_text += f"\n🆔 Message ID: {dup_msg_id}"
-                
-                if premium_duplicate:
-                    dup_id, dup_file_name = premium_duplicate
-                    duplicate_text += f"\n\n💰 <b>Premium Game:</b>"
-                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
-                    duplicate_text += f"\n🆔 Game ID: {dup_id}"
-                
-                duplicate_text += "\n\n❌ Upload cancelled. Please upload a different file."
-                
-                self.robust_send_message(chat_id, duplicate_text)
-                return True
-            
-            # Check if it's a supported game file
-            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
-            if not any(file_name.lower().endswith(ext) for ext in game_extensions):
-                self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
-                print(f"❌ Unsupported file type: {file_name}")
-                return False
-            
-            upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Determine if this is a forwarded file
-            is_forwarded = 'forward_origin' in message
-            forward_info = ""
-            original_message_id = None
-            
-            if is_forwarded:
-                forward_origin = message['forward_origin']
-                if 'sender_user' in forward_origin:
-                    forward_user = forward_origin['sender_user']
-                    forward_name = forward_user.get('first_name', 'Unknown')
-                    forward_info = f"\n🔄 Forwarded from: {forward_name}"
-                elif 'chat' in forward_origin:
-                    forward_chat = forward_origin['chat']
-                    forward_title = forward_chat.get('title', 'Unknown Chat')
-                    forward_info = f"\n🔄 Forwarded from: {forward_title}"
-                
-                # Get original message ID for channel forwards
-                if 'chat' in forward_origin and forward_origin['chat']['type'] == 'channel':
-                    original_message_id = message.get('forward_from_message_id')
-                    print(f"📨 Forwarded from channel, original message ID: {original_message_id}")
-            
-            # Generate unique message ID for storage
-            if original_message_id:
-                storage_message_id = original_message_id
-            else:
-                # For bot-uploaded files, create a unique ID
-                storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
-            
-            # Prepare game info
-            game_info = {
-                'message_id': storage_message_id,
-                'file_name': file_name,
-                'file_type': file_type,
-                'file_size': file_size,
-                'upload_date': upload_date,
-                'category': self.determine_file_category(file_name),
-                'added_by': user_id,
-                'is_uploaded': 1,  # Mark as uploaded by admin
-                'is_forwarded': 1 if is_forwarded else 0,
-                'file_id': file_id,
-                'bot_message_id': bot_message_id  # Store the actual bot message ID
-            }
-            
-            # Store in database
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT INTO channel_games 
-                (message_id, file_name, file_type, file_size, upload_date, category, 
-                 added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (
-                game_info['message_id'],
-                game_info['file_name'],
-                game_info['file_type'],
-                game_info['file_size'],
-                game_info['upload_date'],
-                game_info['category'],
-                game_info['added_by'],
-                game_info['is_uploaded'],
-                game_info['is_forwarded'],
-                game_info['file_id'],
-                game_info['bot_message_id']
-            ))
-            self.conn.commit()
-            
-            # Update cache
-            self.update_games_cache()
-            
-            # Send confirmation
-            size = self.format_file_size(file_size)
-            source_type = "Channel Forward" if original_message_id else "Direct Upload"
-            
-            confirm_text = f"""✅ Game file added successfully!{forward_info}
-
-📁 File: <code>{file_name}</code>
-📦 Type: {file_type}
-📏 Size: {size}
-🗂️ Category: {game_info['category']}
-🕒 Added: {upload_date}
-📮 Source: {source_type}
-🆔 Storage ID: {storage_message_id}
-🤖 Bot Message ID: {bot_message_id}
-
-The file is now available in the games browser and search!"""
-            
-            self.robust_send_message(chat_id, confirm_text)
-            
-            print(f"✅ Successfully stored: {file_name} (Storage ID: {storage_message_id}, Bot Message ID: {bot_message_id})")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Upload error: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def handle_forwarded_message(self, message):
-        try:
-            user_id = message['from']['id']
-            
-            if not self.is_admin(user_id):
-                print(f"❌ Non-admin user {user_id} attempted forwarded upload")
-                return False
-            
-            # Check if this is a forwarded document
-            if 'forward_origin' not in message:
-                return False
-                
-            if 'document' not in message:
-                print("❌ Forwarded message has no document")
-                return False
-            
-            print(f"📨 Processing forwarded file from admin {user_id}")
-            return self.handle_document_upload(message)
-            
-        except Exception as e:
-            print(f"❌ Forwarded message processing error: {e}")
-            return False
-
     def scan_bot_uploaded_games(self):
         """Scan for game files uploaded directly to the bot by admins"""
         try:
@@ -4492,7 +4903,7 @@ The file is now available in the games browser and search!"""
                             
                             # Check if this game is already in database
                             cursor = self.conn.cursor()
-                            cursor.execute('SELECT message_id FROM channel_games WHERE bot_message_id = %s', (message['message_id'],))
+                            cursor.execute('SELECT message_id FROM channel_games WHERE bot_message_id = ?', (message['message_id'],))
                             existing_game = cursor.fetchone()
                             
                             if not existing_game:
@@ -4517,10 +4928,10 @@ The file is now available in the games browser and search!"""
                                 }
                                 
                                 cursor.execute('''
-                                    INSERT INTO channel_games 
+                                    INSERT OR IGNORE INTO channel_games 
                                     (message_id, file_name, file_type, file_size, upload_date, category, 
                                      added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 ''', (
                                     game_info['message_id'],
                                     game_info['file_name'],
@@ -4541,6 +4952,8 @@ The file is now available in the games browser and search!"""
             
             if bot_games_found > 0:
                 print(f"✅ Added {bot_games_found} bot-uploaded games to database")
+                # Trigger backup after scanning
+                self.backup_after_game_action("Bot Games Scan", f"Found {bot_games_found} games")
             
             return bot_games_found
             
@@ -4598,7 +5011,7 @@ The file is now available in the games browser and search!"""
                     else:
                         # Try to get file_id from database
                         cursor = self.conn.cursor()
-                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = %s', (message_id,))
+                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
                         result_db = cursor.fetchone()
                         if result_db and result_db[0]:
                             return self.send_document_directly(chat_id, result_db[0])
@@ -4654,7 +5067,7 @@ The file is now available in the games browser and search!"""
             SELECT message_id, file_name, file_type, file_size, upload_date, category, file_id, 
                    bot_message_id, is_uploaded, is_forwarded
             FROM channel_games 
-            WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
+            WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
         ''', (f'%{search_term}%', f'%{search_term}%'))
         
         all_games = cursor.fetchall()
@@ -4883,7 +5296,7 @@ The file is now available in the games browser and search!"""
             if user_id:
                 cursor.execute('''
                     SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = %s AND is_uploaded = 1
+                    WHERE added_by = ? AND is_uploaded = 1
                 ''', (user_id,))
             else:
                 cursor.execute('''
@@ -4903,7 +5316,7 @@ The file is now available in the games browser and search!"""
             if user_id:
                 cursor.execute('''
                     SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = %s AND is_uploaded = 1 AND is_forwarded = 1
+                    WHERE added_by = ? AND is_uploaded = 1 AND is_forwarded = 1
                 ''', (user_id,))
             else:
                 cursor.execute('''
@@ -4918,63 +5331,61 @@ The file is now available in the games browser and search!"""
 
     # ==================== DATABASE & SETUP METHODS ====================
     
+    def get_db_path(self):
+        if hasattr(sys, '_MEIPASS'):
+            base_path = sys._MEIPASS
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        db_path = os.path.join(base_path, 'telegram_bot.db')
+        return db_path
+    
     def setup_database(self):
         try:
-            # Try PostgreSQL first
-            database_url = os.environ.get('DATABASE_URL')
-            if database_url and POSTGRES_AVAILABLE:
-                # Parse database URL for PostgreSQL
-                if database_url.startswith('postgres://'):
-                    database_url = database_url.replace('postgres://', 'postgresql://')
-                
-                self.conn = psycopg2.connect(database_url, sslmode='require')
-                print("✅ Connected to PostgreSQL database")
-            else:
-                # Fallback to SQLite
-                db_path = 'telegram_bot.db'
-                self.conn = sqlite3.connect(db_path, check_same_thread=False)
-                print(f"📁 Using SQLite database: {db_path}")
+            db_path = self.get_db_path()
+            print(f"📁 Database path: {db_path}")
             
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
             cursor = self.conn.cursor()
             
             # Users table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
+                    user_id INTEGER PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
                     is_verified INTEGER DEFAULT 0,
                     joined_channel INTEGER DEFAULT 0,
                     verification_code TEXT,
-                    code_expires TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    code_expires DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Games table - UPDATED to include bot_message_id
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS channel_games (
-                    id SERIAL PRIMARY KEY,
-                    message_id BIGINT UNIQUE,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date TIMESTAMP,
+                    upload_date DATETIME,
                     category TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    added_by BIGINT DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    added_by INTEGER DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id BIGINT
+                    bot_message_id INTEGER
                 )
             ''')
             
             # Stars tables
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_transactions (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     user_name TEXT,
                     stars_amount INTEGER,
                     usd_amount REAL,
@@ -4982,46 +5393,46 @@ The file is now available in the games browser and search!"""
                     telegram_star_amount INTEGER,
                     transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
                 )
             ''')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_balance (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     total_stars_earned INTEGER DEFAULT 0,
                     total_usd_earned REAL DEFAULT 0.0,
                     available_stars INTEGER DEFAULT 0,
                     available_usd REAL DEFAULT 0.0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game requests table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_requests (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     user_name TEXT,
                     game_name TEXT,
                     platform TEXT,
                     status TEXT DEFAULT 'pending',
                     admin_notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game request replies table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_request_replies (
-                    id SERIAL PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     request_id INTEGER,
-                    admin_id BIGINT,
+                    admin_id INTEGER,
                     reply_text TEXT,
                     photo_file_id TEXT,
-                    reply_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reply_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (request_id) REFERENCES game_requests (id)
                 )
             ''')
@@ -5029,19 +5440,19 @@ The file is now available in the games browser and search!"""
             # Premium games table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_games (
-                    id SERIAL PRIMARY KEY,
-                    message_id BIGINT UNIQUE,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date TIMESTAMP,
+                    upload_date DATETIME,
                     category TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    added_by BIGINT DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    added_by INTEGER DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id BIGINT,
+                    bot_message_id INTEGER,
                     stars_price INTEGER DEFAULT 0,
                     description TEXT,
                     is_premium INTEGER DEFAULT 1
@@ -5051,25 +5462,24 @@ The file is now available in the games browser and search!"""
             # Premium game purchases table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_purchases (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     game_id INTEGER,
                     stars_paid INTEGER,
-                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                     transaction_id TEXT,
                     status TEXT DEFAULT 'completed'
                 )
             ''')
             
             # Initialize balances if not exists
-            cursor.execute('INSERT INTO stars_balance (id) VALUES (1) ON CONFLICT (id) DO NOTHING')
+            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
             
             self.conn.commit()
             print("✅ Database setup successful!")
             
         except Exception as e:
             print(f"❌ Database error: {e}")
-            # Fallback to in-memory SQLite
             self.conn = sqlite3.connect(':memory:', check_same_thread=False)
             self.setup_database()
     
@@ -5190,9 +5600,9 @@ The file is now available in the games browser and search!"""
             cursor = self.conn.cursor()
             for game in game_files:
                 cursor.execute('''
-                    INSERT INTO channel_games 
+                    INSERT OR IGNORE INTO channel_games 
                     (message_id, file_name, file_type, file_size, upload_date, category, added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     game['message_id'],
                     game['file_name'],
@@ -5276,17 +5686,9 @@ The file is now available in the games browser and search!"""
             expires = datetime.now() + timedelta(minutes=10)
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO users 
+                INSERT OR REPLACE INTO users 
                 (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel)
-                VALUES (%s, %s, %s, %s, %s, 0, 0)
-                ON CONFLICT (user_id) 
-                DO UPDATE SET 
-                    username = EXCLUDED.username,
-                    first_name = EXCLUDED.first_name,
-                    verification_code = EXCLUDED.verification_code,
-                    code_expires = EXCLUDED.code_expires,
-                    is_verified = EXCLUDED.is_verified,
-                    joined_channel = EXCLUDED.joined_channel
+                VALUES (?, ?, ?, ?, ?, 0, 0)
             ''', (user_id, username, first_name, code, expires))
             self.conn.commit()
             print(f"✅ Verification code saved for user {user_id}: {code}")
@@ -5300,7 +5702,7 @@ The file is now available in the games browser and search!"""
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT verification_code, code_expires FROM users 
-                WHERE user_id = %s
+                WHERE user_id = ?
             ''', (user_id,))
             result = cursor.fetchone()
             
@@ -5316,7 +5718,7 @@ The file is now available in the games browser and search!"""
                 return False
                 
             if stored_code == code:
-                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = %s', (user_id,))
+                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = ?', (user_id,))
                 self.conn.commit()
                 print(f"✅ User {user_id} verified successfully")
                 return True
@@ -5352,7 +5754,7 @@ The file is now available in the games browser and search!"""
     def mark_channel_joined(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('UPDATE users SET joined_channel = 1 WHERE user_id = %s', (user_id,))
+            cursor.execute('UPDATE users SET joined_channel = 1 WHERE user_id = ?', (user_id,))
             self.conn.commit()
             print(f"✅ Marked channel joined for user {user_id}")
             return True
@@ -5363,7 +5765,7 @@ The file is now available in the games browser and search!"""
     def is_user_verified(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified FROM users WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT is_verified FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             is_verified = result and result[0] == 1
             print(f"🔍 User {user_id} verified: {is_verified}")
@@ -5375,7 +5777,7 @@ The file is now available in the games browser and search!"""
     def is_user_completed(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified, joined_channel FROM users WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             is_completed = result and result[0] == 1 and result[1] == 1
             print(f"🔍 User {user_id} completed: {is_completed}")
@@ -5652,7 +6054,7 @@ Type your game name now!"""
     def handle_profile(self, chat_id, message_id, user_id, first_name):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             
             if result:
@@ -5686,7 +6088,7 @@ Use this ID for admin verification if needed."""
         """Get user info from database"""
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id, username, first_name FROM users WHERE user_id = %s', (user_id,))
+            cursor.execute('SELECT user_id, username, first_name FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             
             if result:
@@ -5881,6 +6283,9 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                         return True
                     elif text == '/status' and self.is_admin(user_id):
                         self.redeploy_system.show_system_status(user_id, chat_id, message['message_id'])
+                        return True
+                    elif text == '/backup' and self.is_admin(user_id):
+                        self.show_backup_menu(user_id, chat_id, message['message_id'])
                         return True
                 
                 # Handle code verification
@@ -6171,6 +6576,11 @@ except ImportError:
 # Get tokens from environment variables
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
+# GitHub Backup Configuration
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+GITHUB_REPO_OWNER = os.environ.get('GITHUB_REPO_OWNER')
+GITHUB_REPO_NAME = os.environ.get('GITHUB_REPO_NAME')
+
 if not BOT_TOKEN:
     print("❌ ERROR: BOT_TOKEN environment variable not set!")
     print("💡 Please set BOT_TOKEN in:")
@@ -6178,6 +6588,11 @@ if not BOT_TOKEN:
     print("   - OR create a .env file with BOT_TOKEN=your_token")
     # Don't exit - let the health server continue running
     print("💡 Health server will continue running for monitoring")
+
+if GITHUB_TOKEN and GITHUB_REPO_OWNER and GITHUB_REPO_NAME:
+    print("✅ GitHub Backup: Configuration detected")
+else:
+    print("ℹ️ GitHub Backup: Not configured (optional)")
 
 # Test the token before starting
 def test_bot_connection(token):
@@ -6199,7 +6614,7 @@ def test_bot_connection(token):
         return False
 
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Telegram Bot with Redeploy System...")
+    print("🚀 Starting Enhanced Telegram Bot with GitHub Backup System...")
     
     # Start health check server first (always)
     start_health_check()
