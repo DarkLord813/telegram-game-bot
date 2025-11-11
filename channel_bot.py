@@ -14,6 +14,15 @@ import traceback
 import base64
 from io import BytesIO
 
+# PostgreSQL support
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+    print("⚠️ psycopg2 not installed, falling back to SQLite")
+
 print("TELEGRAM BOT - CROSS PLATFORM")
 print("Code Verification + Channel Join + Game Scanner")
 print("Admin Game Uploads Enabled + Forward Support + Game Scanner")
@@ -525,8 +534,8 @@ class TelegramStarsSystem:
             # Stars transactions table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     user_name TEXT,
                     stars_amount INTEGER,
                     usd_amount REAL,
@@ -534,25 +543,25 @@ class TelegramStarsSystem:
                     telegram_star_amount INTEGER,
                     transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    completed_at DATETIME
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP
                 )
             ''')
             
             # Stars balance table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_balance (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     total_stars_earned INTEGER DEFAULT 0,
                     total_usd_earned REAL DEFAULT 0.0,
                     available_stars INTEGER DEFAULT 0,
                     available_usd REAL DEFAULT 0.0,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Initialize balance if not exists
-            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
+            cursor.execute('INSERT INTO stars_balance (id) VALUES (1) ON CONFLICT (id) DO NOTHING')
             
             self.bot.conn.commit()
             print("✅ Telegram Stars database setup complete!")
@@ -600,7 +609,7 @@ class TelegramStarsSystem:
                 cursor.execute('''
                     INSERT INTO stars_transactions 
                     (user_id, user_name, stars_amount, usd_amount, description, transaction_id, payment_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ''', (
                     user_id,
                     self.bot.get_user_info(user_id)['first_name'],
@@ -659,7 +668,7 @@ class TelegramStarsSystem:
                 cursor.execute('''
                     INSERT INTO premium_purchases 
                     (user_id, game_id, stars_paid, transaction_id, status)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 ''', (user_id, game_id, stars_amount, invoice_payload, 'pending'))
                 
                 self.bot.conn.commit()
@@ -703,7 +712,7 @@ class TelegramStarsSystem:
                 SELECT user_name, stars_amount, usd_amount, payment_status, created_at 
                 FROM stars_transactions 
                 ORDER BY created_at DESC 
-                LIMIT ?
+                LIMIT %s
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -717,23 +726,23 @@ class TelegramStarsSystem:
             cursor.execute('''
                 UPDATE premium_purchases 
                 SET status = 'completed' 
-                WHERE transaction_id = ?
+                WHERE transaction_id = %s
             ''', (transaction_id,))
             
             # Update stars balance
             cursor.execute('''
                 UPDATE stars_balance 
                 SET total_stars_earned = total_stars_earned + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
+                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = %s
                 ),
                 total_usd_earned = total_usd_earned + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
+                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = %s
                 ),
                 available_stars = available_stars + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
+                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = %s
                 ),
                 available_usd = available_usd + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
+                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = %s
                 ),
                 last_updated = CURRENT_TIMESTAMP
                 WHERE id = 1
@@ -760,27 +769,27 @@ class GameRequestSystem:
             # Game requests table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     user_name TEXT,
                     game_name TEXT,
                     platform TEXT,
                     status TEXT DEFAULT 'pending',
                     admin_notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game request replies table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_request_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     request_id INTEGER,
-                    admin_id INTEGER,
+                    admin_id BIGINT,
                     reply_text TEXT,
                     photo_file_id TEXT,
-                    reply_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    reply_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (request_id) REFERENCES game_requests (id)
                 )
             ''')
@@ -801,7 +810,7 @@ class GameRequestSystem:
             cursor.execute('''
                 INSERT INTO game_requests 
                 (user_id, user_name, game_name, platform, status)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             ''', (user_id, user_name, game_name, platform, 'pending'))
             
             self.bot.conn.commit()
@@ -826,7 +835,7 @@ class GameRequestSystem:
                 FROM game_requests 
                 WHERE status = 'pending' 
                 ORDER BY created_at DESC 
-                LIMIT ?
+                LIMIT %s
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -840,9 +849,9 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT id, game_name, platform, status, created_at 
                 FROM game_requests 
-                WHERE user_id = ? 
+                WHERE user_id = %s 
                 ORDER BY created_at DESC 
-                LIMIT ?
+                LIMIT %s
             ''', (user_id, limit))
             return cursor.fetchall()
         except Exception as e:
@@ -856,7 +865,7 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT id, user_id, user_name, game_name, platform, status, admin_notes, created_at
                 FROM game_requests 
-                WHERE id = ?
+                WHERE id = %s
             ''', (request_id,))
             result = cursor.fetchone()
             
@@ -882,8 +891,8 @@ class GameRequestSystem:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
                 UPDATE game_requests 
-                SET status = ?, admin_notes = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                SET status = %s, admin_notes = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
             ''', (status, admin_notes, request_id))
             
             self.bot.conn.commit()
@@ -899,7 +908,7 @@ class GameRequestSystem:
             cursor.execute('''
                 INSERT INTO game_request_replies 
                 (request_id, admin_id, reply_text, photo_file_id)
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
             ''', (request_id, admin_id, reply_text, photo_file_id))
             
             self.bot.conn.commit()
@@ -915,7 +924,7 @@ class GameRequestSystem:
             cursor.execute('''
                 SELECT admin_id, reply_text, photo_file_id, reply_date
                 FROM game_request_replies 
-                WHERE request_id = ?
+                WHERE request_id = %s
                 ORDER BY reply_date ASC
             ''', (request_id,))
             return cursor.fetchall()
@@ -964,19 +973,19 @@ class PremiumGamesSystem:
             # Premium games table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
+                    id SERIAL PRIMARY KEY,
+                    message_id BIGINT UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date DATETIME,
+                    upload_date TIMESTAMP,
                     category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    added_by BIGINT DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id INTEGER,
+                    bot_message_id BIGINT,
                     stars_price INTEGER DEFAULT 0,
                     description TEXT,
                     is_premium INTEGER DEFAULT 1
@@ -986,11 +995,11 @@ class PremiumGamesSystem:
             # Premium game purchases table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_purchases (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     game_id INTEGER,
                     stars_paid INTEGER,
-                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     transaction_id TEXT,
                     status TEXT DEFAULT 'completed'
                 )
@@ -1010,7 +1019,7 @@ class PremiumGamesSystem:
                 INSERT INTO premium_games 
                 (message_id, file_name, file_type, file_size, upload_date, category, 
                  added_by, is_uploaded, is_forwarded, file_id, bot_message_id, stars_price, description, is_premium)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (
                 game_info['message_id'],
                 game_info['file_name'],
@@ -1043,7 +1052,7 @@ class PremiumGamesSystem:
                 FROM premium_games 
                 WHERE is_premium = 1
                 ORDER BY created_at DESC 
-                LIMIT ?
+                LIMIT %s
             ''', (limit,))
             return cursor.fetchall()
         except Exception as e:
@@ -1058,7 +1067,7 @@ class PremiumGamesSystem:
                 SELECT id, file_name, file_type, file_size, stars_price, description, 
                        file_id, bot_message_id, is_uploaded, message_id
                 FROM premium_games 
-                WHERE id = ?
+                WHERE id = %s
             ''', (game_id,))
             result = cursor.fetchone()
             
@@ -1086,7 +1095,7 @@ class PremiumGamesSystem:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
                 SELECT id FROM premium_purchases 
-                WHERE user_id = ? AND game_id = ? AND status = 'completed'
+                WHERE user_id = %s AND game_id = %s AND status = 'completed'
             ''', (user_id, game_id))
             return cursor.fetchone() is not None
         except Exception as e:
@@ -1100,7 +1109,7 @@ class PremiumGamesSystem:
             cursor.execute('''
                 INSERT INTO premium_purchases 
                 (user_id, game_id, stars_paid, transaction_id, status)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
             ''', (user_id, game_id, stars_paid, transaction_id, 'completed'))
             
             self.bot.conn.commit()
@@ -2133,14 +2142,14 @@ Choose an option:"""
             # Check in regular games
             cursor.execute('''
                 SELECT message_id, file_name FROM channel_games 
-                WHERE file_name = ? AND file_size = ? AND file_type = ?
+                WHERE file_name = %s AND file_size = %s AND file_type = %s
             ''', (file_name, file_size, file_type))
             regular_duplicate = cursor.fetchone()
             
             # Check in premium games
             cursor.execute('''
                 SELECT id, file_name FROM premium_games 
-                WHERE file_name = ? AND file_size = ? AND file_type = ?
+                WHERE file_name = %s AND file_size = %s AND file_type = %s
             ''', (file_name, file_size, file_type))
             premium_duplicate = cursor.fetchone()
             
@@ -2221,7 +2230,7 @@ Choose an option:"""
                 SELECT message_id, file_name, file_type, file_size, upload_date, category, 
                        file_id, bot_message_id, is_uploaded, is_forwarded
                 FROM channel_games 
-                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
+                WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
                 ORDER BY file_name
                 LIMIT 20
             ''', (f'%{search_term}%', f'%{search_term}%'))
@@ -2233,7 +2242,7 @@ Choose an option:"""
                 SELECT id, file_name, file_type, file_size, stars_price, description, 
                        upload_date, file_id, bot_message_id, is_uploaded
                 FROM premium_games 
-                WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
+                WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
                 ORDER BY file_name
                 LIMIT 20
             ''', (f'%{search_term}%', f'%{search_term}%'))
@@ -2343,7 +2352,7 @@ Found: {len(all_results)} games
             
             if game_type == 'R':  # Regular game
                 # Get game info before deletion
-                cursor.execute('SELECT file_name FROM channel_games WHERE message_id = ?', (game_id,))
+                cursor.execute('SELECT file_name FROM channel_games WHERE message_id = %s', (game_id,))
                 game_info = cursor.fetchone()
                 
                 if not game_info:
@@ -2353,7 +2362,7 @@ Found: {len(all_results)} games
                 file_name = game_info[0]
                 
                 # Delete the game
-                cursor.execute('DELETE FROM channel_games WHERE message_id = ?', (game_id,))
+                cursor.execute('DELETE FROM channel_games WHERE message_id = %s', (game_id,))
                 self.conn.commit()
                 
                 # Update cache
@@ -2363,7 +2372,7 @@ Found: {len(all_results)} games
                 
             elif game_type == 'P':  # Premium game
                 # Get game info before deletion
-                cursor.execute('SELECT file_name FROM premium_games WHERE id = ?', (game_id,))
+                cursor.execute('SELECT file_name FROM premium_games WHERE id = %s', (game_id,))
                 game_info = cursor.fetchone()
                 
                 if not game_info:
@@ -2373,8 +2382,8 @@ Found: {len(all_results)} games
                 file_name = game_info[0]
                 
                 # Delete the game and associated purchases
-                cursor.execute('DELETE FROM premium_games WHERE id = ?', (game_id,))
-                cursor.execute('DELETE FROM premium_purchases WHERE game_id = ?', (game_id,))
+                cursor.execute('DELETE FROM premium_games WHERE id = %s', (game_id,))
+                cursor.execute('DELETE FROM premium_purchases WHERE game_id = %s', (game_id,))
                 self.conn.commit()
                 
                 result_text = f"✅ <b>Premium Game Removed</b>\n\n📁 <code>{file_name}</code>\n🆔 {game_id}\n\nGame and all purchase records have been removed."
@@ -2406,10 +2415,10 @@ Found: {len(all_results)} games
             cursor = self.conn.cursor()
             
             if game_type == 'R':
-                cursor.execute('SELECT file_name, file_size, file_type FROM channel_games WHERE message_id = ?', (game_id,))
+                cursor.execute('SELECT file_name, file_size, file_type FROM channel_games WHERE message_id = %s', (game_id,))
                 table_name = "channel_games"
             else:
-                cursor.execute('SELECT file_name, file_size, file_type FROM premium_games WHERE id = ?', (game_id,))
+                cursor.execute('SELECT file_name, file_size, file_type FROM premium_games WHERE id = %s', (game_id,))
                 table_name = "premium_games"
             
             game_info = cursor.fetchone()
@@ -3824,12 +3833,12 @@ Use the broadcast feature to send messages to all users."""
             cursor = self.conn.cursor()
             
             # Check if bot_message_id column exists
-            cursor.execute("PRAGMA table_info(channel_games)")
-            columns = [column[1] for column in cursor.fetchall()]
+            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='channel_games' AND column_name='bot_message_id'")
+            result = cursor.fetchone()
             
-            if 'bot_message_id' not in columns:
+            if not result:
                 print("🔄 Adding bot_message_id column to database...")
-                cursor.execute('ALTER TABLE channel_games ADD COLUMN bot_message_id INTEGER')
+                cursor.execute('ALTER TABLE channel_games ADD COLUMN bot_message_id BIGINT')
                 self.conn.commit()
                 print("✅ Database schema updated successfully!")
                 
@@ -4376,10 +4385,10 @@ This game already exists in the database:"""
             # Store in database
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO channel_games 
+                INSERT INTO channel_games 
                 (message_id, file_name, file_type, file_size, upload_date, category, 
                  added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (
                 game_info['message_id'],
                 game_info['file_name'],
@@ -4483,7 +4492,7 @@ The file is now available in the games browser and search!"""
                             
                             # Check if this game is already in database
                             cursor = self.conn.cursor()
-                            cursor.execute('SELECT message_id FROM channel_games WHERE bot_message_id = ?', (message['message_id'],))
+                            cursor.execute('SELECT message_id FROM channel_games WHERE bot_message_id = %s', (message['message_id'],))
                             existing_game = cursor.fetchone()
                             
                             if not existing_game:
@@ -4508,10 +4517,10 @@ The file is now available in the games browser and search!"""
                                 }
                                 
                                 cursor.execute('''
-                                    INSERT OR IGNORE INTO channel_games 
+                                    INSERT INTO channel_games 
                                     (message_id, file_name, file_type, file_size, upload_date, category, 
                                      added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                                 ''', (
                                     game_info['message_id'],
                                     game_info['file_name'],
@@ -4589,7 +4598,7 @@ The file is now available in the games browser and search!"""
                     else:
                         # Try to get file_id from database
                         cursor = self.conn.cursor()
-                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
+                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = %s', (message_id,))
                         result_db = cursor.fetchone()
                         if result_db and result_db[0]:
                             return self.send_document_directly(chat_id, result_db[0])
@@ -4645,7 +4654,7 @@ The file is now available in the games browser and search!"""
             SELECT message_id, file_name, file_type, file_size, upload_date, category, file_id, 
                    bot_message_id, is_uploaded, is_forwarded
             FROM channel_games 
-            WHERE LOWER(file_name) LIKE ? OR file_name LIKE ?
+            WHERE LOWER(file_name) LIKE %s OR file_name LIKE %s
         ''', (f'%{search_term}%', f'%{search_term}%'))
         
         all_games = cursor.fetchall()
@@ -4874,7 +4883,7 @@ The file is now available in the games browser and search!"""
             if user_id:
                 cursor.execute('''
                     SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = ? AND is_uploaded = 1
+                    WHERE added_by = %s AND is_uploaded = 1
                 ''', (user_id,))
             else:
                 cursor.execute('''
@@ -4894,7 +4903,7 @@ The file is now available in the games browser and search!"""
             if user_id:
                 cursor.execute('''
                     SELECT COUNT(*) FROM channel_games 
-                    WHERE added_by = ? AND is_uploaded = 1 AND is_forwarded = 1
+                    WHERE added_by = %s AND is_uploaded = 1 AND is_forwarded = 1
                 ''', (user_id,))
             else:
                 cursor.execute('''
@@ -4909,61 +4918,63 @@ The file is now available in the games browser and search!"""
 
     # ==================== DATABASE & SETUP METHODS ====================
     
-    def get_db_path(self):
-        if hasattr(sys, '_MEIPASS'):
-            base_path = sys._MEIPASS
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-        
-        db_path = os.path.join(base_path, 'telegram_bot.db')
-        return db_path
-    
     def setup_database(self):
         try:
-            db_path = self.get_db_path()
-            print(f"📁 Database path: {db_path}")
+            # Try PostgreSQL first
+            database_url = os.environ.get('DATABASE_URL')
+            if database_url and POSTGRES_AVAILABLE:
+                # Parse database URL for PostgreSQL
+                if database_url.startswith('postgres://'):
+                    database_url = database_url.replace('postgres://', 'postgresql://')
+                
+                self.conn = psycopg2.connect(database_url, sslmode='require')
+                print("✅ Connected to PostgreSQL database")
+            else:
+                # Fallback to SQLite
+                db_path = 'telegram_bot.db'
+                self.conn = sqlite3.connect(db_path, check_same_thread=False)
+                print(f"📁 Using SQLite database: {db_path}")
             
-            self.conn = sqlite3.connect(db_path, check_same_thread=False)
             cursor = self.conn.cursor()
             
             # Users table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
+                    user_id BIGINT PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
                     is_verified INTEGER DEFAULT 0,
                     joined_channel INTEGER DEFAULT 0,
                     verification_code TEXT,
-                    code_expires DATETIME,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    code_expires TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Games table - UPDATED to include bot_message_id
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS channel_games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
+                    id SERIAL PRIMARY KEY,
+                    message_id BIGINT UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date DATETIME,
+                    upload_date TIMESTAMP,
                     category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    added_by BIGINT DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id INTEGER
+                    bot_message_id BIGINT
                 )
             ''')
             
             # Stars tables
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     user_name TEXT,
                     stars_amount INTEGER,
                     usd_amount REAL,
@@ -4971,46 +4982,46 @@ The file is now available in the games browser and search!"""
                     telegram_star_amount INTEGER,
                     transaction_id TEXT,
                     payment_status TEXT DEFAULT 'pending',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    completed_at DATETIME
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP
                 )
             ''')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_balance (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     total_stars_earned INTEGER DEFAULT 0,
                     total_usd_earned REAL DEFAULT 0.0,
                     available_stars INTEGER DEFAULT 0,
                     available_usd REAL DEFAULT 0.0,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game requests table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     user_name TEXT,
                     game_name TEXT,
                     platform TEXT,
                     status TEXT DEFAULT 'pending',
                     admin_notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             # Game request replies table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_request_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     request_id INTEGER,
-                    admin_id INTEGER,
+                    admin_id BIGINT,
                     reply_text TEXT,
                     photo_file_id TEXT,
-                    reply_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    reply_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (request_id) REFERENCES game_requests (id)
                 )
             ''')
@@ -5018,19 +5029,19 @@ The file is now available in the games browser and search!"""
             # Premium games table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
+                    id SERIAL PRIMARY KEY,
+                    message_id BIGINT UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date DATETIME,
+                    upload_date TIMESTAMP,
                     category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    added_by BIGINT DEFAULT 0,
                     is_uploaded INTEGER DEFAULT 0,
                     is_forwarded INTEGER DEFAULT 0,
                     file_id TEXT,
-                    bot_message_id INTEGER,
+                    bot_message_id BIGINT,
                     stars_price INTEGER DEFAULT 0,
                     description TEXT,
                     is_premium INTEGER DEFAULT 1
@@ -5040,24 +5051,25 @@ The file is now available in the games browser and search!"""
             # Premium game purchases table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_purchases (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
                     game_id INTEGER,
                     stars_paid INTEGER,
-                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     transaction_id TEXT,
                     status TEXT DEFAULT 'completed'
                 )
             ''')
             
             # Initialize balances if not exists
-            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
+            cursor.execute('INSERT INTO stars_balance (id) VALUES (1) ON CONFLICT (id) DO NOTHING')
             
             self.conn.commit()
             print("✅ Database setup successful!")
             
         except Exception as e:
             print(f"❌ Database error: {e}")
+            # Fallback to in-memory SQLite
             self.conn = sqlite3.connect(':memory:', check_same_thread=False)
             self.setup_database()
     
@@ -5178,9 +5190,9 @@ The file is now available in the games browser and search!"""
             cursor = self.conn.cursor()
             for game in game_files:
                 cursor.execute('''
-                    INSERT OR IGNORE INTO channel_games 
+                    INSERT INTO channel_games 
                     (message_id, file_name, file_type, file_size, upload_date, category, added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', (
                     game['message_id'],
                     game['file_name'],
@@ -5264,9 +5276,17 @@ The file is now available in the games browser and search!"""
             expires = datetime.now() + timedelta(minutes=10)
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO users 
+                INSERT INTO users 
                 (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel)
-                VALUES (?, ?, ?, ?, ?, 0, 0)
+                VALUES (%s, %s, %s, %s, %s, 0, 0)
+                ON CONFLICT (user_id) 
+                DO UPDATE SET 
+                    username = EXCLUDED.username,
+                    first_name = EXCLUDED.first_name,
+                    verification_code = EXCLUDED.verification_code,
+                    code_expires = EXCLUDED.code_expires,
+                    is_verified = EXCLUDED.is_verified,
+                    joined_channel = EXCLUDED.joined_channel
             ''', (user_id, username, first_name, code, expires))
             self.conn.commit()
             print(f"✅ Verification code saved for user {user_id}: {code}")
@@ -5280,7 +5300,7 @@ The file is now available in the games browser and search!"""
             cursor = self.conn.cursor()
             cursor.execute('''
                 SELECT verification_code, code_expires FROM users 
-                WHERE user_id = ?
+                WHERE user_id = %s
             ''', (user_id,))
             result = cursor.fetchone()
             
@@ -5296,7 +5316,7 @@ The file is now available in the games browser and search!"""
                 return False
                 
             if stored_code == code:
-                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = ?', (user_id,))
+                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = %s', (user_id,))
                 self.conn.commit()
                 print(f"✅ User {user_id} verified successfully")
                 return True
@@ -5332,7 +5352,7 @@ The file is now available in the games browser and search!"""
     def mark_channel_joined(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('UPDATE users SET joined_channel = 1 WHERE user_id = ?', (user_id,))
+            cursor.execute('UPDATE users SET joined_channel = 1 WHERE user_id = %s', (user_id,))
             self.conn.commit()
             print(f"✅ Marked channel joined for user {user_id}")
             return True
@@ -5343,7 +5363,7 @@ The file is now available in the games browser and search!"""
     def is_user_verified(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT is_verified FROM users WHERE user_id = %s', (user_id,))
             result = cursor.fetchone()
             is_verified = result and result[0] == 1
             print(f"🔍 User {user_id} verified: {is_verified}")
@@ -5355,7 +5375,7 @@ The file is now available in the games browser and search!"""
     def is_user_completed(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT is_verified, joined_channel FROM users WHERE user_id = %s', (user_id,))
             result = cursor.fetchone()
             is_completed = result and result[0] == 1 and result[1] == 1
             print(f"🔍 User {user_id} completed: {is_completed}")
@@ -5632,7 +5652,7 @@ Type your game name now!"""
     def handle_profile(self, chat_id, message_id, user_id, first_name):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = %s', (user_id,))
             result = cursor.fetchone()
             
             if result:
@@ -5666,7 +5686,7 @@ Use this ID for admin verification if needed."""
         """Get user info from database"""
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id, username, first_name FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT user_id, username, first_name FROM users WHERE user_id = %s', (user_id,))
             result = cursor.fetchone()
             
             if result:
