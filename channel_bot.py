@@ -906,7 +906,7 @@ class TelegramStarsSystem:
             cursor = self.bot.conn.cursor()
             cursor.execute('''
                 UPDATE premium_purchases 
-                SET status = 'completed' 
+                set status = 'completed' 
                 WHERE transaction_id = ?
             ''', (transaction_id,))
             
@@ -1400,8 +1400,8 @@ class CrossPlatformBot:
             # Recover games cache
             self.update_games_cache()
             
-            # Recover uploaded files
-            self.recover_uploaded_files()
+            # Recover uploaded files - FIXED VERSION
+            self.recover_file_access_after_restart()
             
             # Recover sessions from database (if you want persistent sessions)
             self.recover_persistent_sessions()
@@ -1423,6 +1423,128 @@ class CrossPlatformBot:
             print(f"❌ Bot initialization failed: {e}")
             return False
 
+    def recover_file_access_after_restart(self):
+        """Recover file access for all uploaded games after restart"""
+        try:
+            print("🔄 Recovering file access after restart...")
+            
+            cursor = self.conn.cursor()
+            
+            # Recover regular games
+            cursor.execute('''
+                SELECT message_id, file_name, file_id, bot_message_id, is_uploaded 
+                FROM channel_games 
+                WHERE is_uploaded = 1
+            ''')
+            regular_games = cursor.fetchall()
+            
+            recovered_count = 0
+            for game in regular_games:
+                message_id, file_name, file_id, bot_message_id, is_uploaded = game
+                
+                # If we have a file_id, verify it's still accessible
+                if file_id:
+                    if self.verify_and_update_file_id(file_id, message_id, True):
+                        recovered_count += 1
+                        print(f"✅ Recovered regular game: {file_name}")
+                    else:
+                        print(f"❌ File ID invalid for: {file_name}")
+                        # Try to get new file_id from bot message
+                        if bot_message_id:
+                            new_file_id = self.get_file_id_from_bot_message(bot_message_id)
+                            if new_file_id:
+                                cursor.execute(
+                                    'UPDATE channel_games SET file_id = ? WHERE message_id = ?',
+                                    (new_file_id, message_id)
+                                )
+                                recovered_count += 1
+                                print(f"✅ Recovered file ID for: {file_name}")
+            
+            # Recover premium games
+            cursor.execute('''
+                SELECT id, file_name, file_id, bot_message_id 
+                FROM premium_games 
+                WHERE is_uploaded = 1
+            ''')
+            premium_games = cursor.fetchall()
+            
+            for game in premium_games:
+                game_id, file_name, file_id, bot_message_id = game
+                
+                if file_id:
+                    if self.verify_and_update_file_id(file_id, game_id, False):
+                        recovered_count += 1
+                        print(f"✅ Recovered premium game: {file_name}")
+                    else:
+                        if bot_message_id:
+                            new_file_id = self.get_file_id_from_bot_message(bot_message_id)
+                            if new_file_id:
+                                cursor.execute(
+                                    'UPDATE premium_games SET file_id = ? WHERE id = ?',
+                                    (new_file_id, game_id)
+                                )
+                                recovered_count += 1
+                                print(f"✅ Recovered file ID for: {file_name}")
+            
+            self.conn.commit()
+            print(f"✅ File recovery complete: {recovered_count} files recovered")
+            return recovered_count
+            
+        except Exception as e:
+            print(f"❌ File recovery error: {e}")
+            return 0
+
+    def verify_and_update_file_id(self, file_id, identifier, is_regular=True):
+        """Verify file_id is still valid and update if needed"""
+        try:
+            # Test if file_id is still accessible
+            url = self.base_url + "getFile"
+            data = {"file_id": file_id}
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                return True
+            else:
+                print(f"❌ File ID {file_id[:10]}... invalid, needs update")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error verifying file ID: {e}")
+            return False
+
+    def get_file_id_from_bot_message(self, bot_message_id):
+        """Get file_id from a bot message by its message_id"""
+        try:
+            # Get the message details
+            url = self.base_url + "getChat"
+            data = {"chat_id": self.ADMIN_IDS[0]}  # Use first admin's chat
+            response = requests.post(url, data=data, timeout=10)
+            
+            if response.json().get('ok'):
+                # Try to get the message
+                url = self.base_url + "getMessage"
+                data = {
+                    "chat_id": self.ADMIN_IDS[0],
+                    "message_id": bot_message_id
+                }
+                response = requests.post(url, data=data, timeout=10)
+                result = response.json()
+                
+                if result.get('ok'):
+                    message = result['result']
+                    if 'document' in message:
+                        return message['document'].get('file_id')
+                    elif 'photo' in message:
+                        # Get the highest quality photo
+                        return message['photo'][-1].get('file_id')
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error getting file ID from message: {e}")
+            return None
+
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
         try:
@@ -1441,66 +1563,6 @@ class CrossPlatformBot:
             print("✅ Sessions reset for fresh start")
         except Exception as e:
             print(f"❌ Session recovery error: {e}")
-
-    def recover_uploaded_files(self):
-        """Recover and verify all uploaded files after restart"""
-        try:
-            print("🔄 Recovering uploaded files...")
-            
-            cursor = self.conn.cursor()
-            
-            # Check bot-uploaded files
-            cursor.execute('''
-                SELECT message_id, file_name, bot_message_id, file_id 
-                FROM channel_games 
-                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
-            ''')
-            bot_files = cursor.fetchall()
-            
-            recovered_count = 0
-            for message_id, file_name, bot_message_id, file_id in bot_files:
-                # Verify the file still exists and is accessible
-                if self.verify_file_accessible(bot_message_id, file_id, True):
-                    recovered_count += 1
-                    print(f"✅ Recovered bot file: {file_name}")
-                else:
-                    print(f"❌ Bot file not accessible: {file_name}")
-                    # You might want to mark it as problematic or remove it
-            
-            # Check premium games
-            cursor.execute('''
-                SELECT id, file_name, bot_message_id, file_id 
-                FROM premium_games 
-                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
-            ''')
-            premium_files = cursor.fetchall()
-            
-            for game_id, file_name, bot_message_id, file_id in premium_files:
-                if self.verify_file_accessible(bot_message_id, file_id, True):
-                    recovered_count += 1
-                    print(f"✅ Recovered premium file: {file_name}")
-                else:
-                    print(f"❌ Premium file not accessible: {file_name}")
-            
-            print(f"✅ File recovery complete: {recovered_count} files recovered")
-            return recovered_count
-            
-        except Exception as e:
-            print(f"❌ File recovery error: {e}")
-            return 0
-
-    def verify_file_accessible(self, message_id, file_id, is_bot_file):
-        """Verify if a file is still accessible"""
-        try:
-            # Try to get file info to verify accessibility
-            url = self.base_url + "getFile"
-            data = {"file_id": file_id}
-            response = requests.post(url, data=data, timeout=10)
-            result = response.json()
-            
-            return result.get('ok', False)
-        except:
-            return False
 
     def start_keep_alive(self):
         """Start the enhanced keep-alive service"""
@@ -1682,6 +1744,7 @@ Are you sure you want to continue?"""
                 self.setup_database()
                 self.verify_database_schema()
                 self.update_games_cache()
+                self.recover_file_access_after_restart()  # Recover file access after restore
                 
                 result_text = """✅ <b>Database Restored Successfully!</b>
 
