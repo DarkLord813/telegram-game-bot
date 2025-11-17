@@ -1,15 +1,7 @@
 requests==2.31.0
 flask==2.3.3
 python-dotenv==1.0.0
-schedule==1.2.0
-apscheduler==3.10.4
-redis==5.0.1
-pymongo==4.5.0
-mysql-connector-python==8.1.0
 psutil==5.9.6
 cryptography==41.0.7
 pillow==10.0.1
 gunicorn==21.2.0
-pygithub==1.59.0
-python-dateutil==2.8.2
-sqlite3
