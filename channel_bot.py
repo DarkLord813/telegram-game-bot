@@ -2434,7 +2434,7 @@ Choose an option:"""
 
 🎮 Available Games:
 • PSP Games (ISO/CSO)
-• PS1 Games
+• PS2 Games
 • Android Games (APK)
 • Emulator Games
 • And much more!
