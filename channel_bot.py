@@ -1400,7 +1400,10 @@ class CrossPlatformBot:
             # Recover games cache
             self.update_games_cache()
             
-            # Recover uploaded files - FIXED VERSION
+            # CRITICAL: Recover file access for all games
+            self.recover_file_access_for_all_games()
+            
+            # Recover uploaded files
             self.recover_file_access_after_restart()
             
             # Recover sessions from database (if you want persistent sessions)
@@ -1494,6 +1497,46 @@ class CrossPlatformBot:
             print(f"❌ File recovery error: {e}")
             return 0
 
+    def recover_file_access_for_all_games(self):
+        """Recover and update file access for all games in database"""
+        try:
+            print("🔄 Recovering file access for all games...")
+            
+            cursor = self.conn.cursor()
+            
+            # Get all games that need file_id recovery
+            cursor.execute('''
+                SELECT message_id, file_name, file_id, bot_message_id, is_uploaded 
+                FROM channel_games 
+                WHERE file_id IS NULL OR file_id = '' OR file_id = 'none'
+            ''')
+            games_needing_recovery = cursor.fetchall()
+            
+            recovered_count = 0
+            for game in games_needing_recovery:
+                message_id, file_name, file_id, bot_message_id, is_uploaded = game
+                
+                if is_uploaded == 1 and bot_message_id:
+                    # Try to get file_id from bot message
+                    new_file_id = self.get_file_id_from_bot_message(bot_message_id)
+                    if new_file_id:
+                        # Test if this file_id is universally accessible
+                        if self.test_file_id_accessibility(new_file_id):
+                            cursor.execute(
+                                'UPDATE channel_games SET file_id = ? WHERE message_id = ?',
+                                (new_file_id, message_id)
+                            )
+                            recovered_count += 1
+                            print(f"✅ Recovered file ID for: {file_name}")
+            
+            self.conn.commit()
+            print(f"✅ File recovery complete: {recovered_count} files updated")
+            return recovered_count
+            
+        except Exception as e:
+            print(f"❌ File recovery error: {e}")
+            return 0
+
     def verify_and_update_file_id(self, file_id, identifier, is_regular=True):
         """Verify file_id is still valid and update if needed"""
         try:
@@ -1516,34 +1559,57 @@ class CrossPlatformBot:
     def get_file_id_from_bot_message(self, bot_message_id):
         """Get file_id from a bot message by its message_id"""
         try:
-            # Get the message details
-            url = self.base_url + "getChat"
-            data = {"chat_id": self.ADMIN_IDS[0]}  # Use first admin's chat
-            response = requests.post(url, data=data, timeout=10)
-            
-            if response.json().get('ok'):
-                # Try to get the message
-                url = self.base_url + "getMessage"
-                data = {
-                    "chat_id": self.ADMIN_IDS[0],
-                    "message_id": bot_message_id
-                }
-                response = requests.post(url, data=data, timeout=10)
-                result = response.json()
-                
-                if result.get('ok'):
-                    message = result['result']
-                    if 'document' in message:
-                        return message['document'].get('file_id')
-                    elif 'photo' in message:
-                        # Get the highest quality photo
-                        return message['photo'][-1].get('file_id')
+            # Get the message details from the first admin's chat
+            for admin_id in self.ADMIN_IDS:
+                try:
+                    # Try to get the message from admin's chat
+                    url = self.base_url + "getMessage"
+                    data = {
+                        "chat_id": admin_id,
+                        "message_id": bot_message_id
+                    }
+                    response = requests.post(url, data=data, timeout=10)
+                    result = response.json()
+                    
+                    if result.get('ok'):
+                        message = result['result']
+                        if 'document' in message:
+                            return message['document'].get('file_id')
+                        elif 'photo' in message:
+                            # Get the highest quality photo
+                            return message['photo'][-1].get('file_id')
+                except Exception as e:
+                    print(f"❌ Error getting file ID from admin {admin_id}: {e}")
+                    continue
             
             return None
             
         except Exception as e:
             print(f"❌ Error getting file ID from message: {e}")
             return None
+
+    def test_file_id_accessibility(self, file_id):
+        """Test if a file_id can be accessed by the bot universally"""
+        try:
+            if not file_id:
+                return False
+                
+            # Try to get file info - this tests if file_id is valid and accessible
+            url = self.base_url + "getFile"
+            data = {"file_id": file_id}
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                print(f"✅ File ID is universally accessible: {file_id[:20]}...")
+                return True
+            else:
+                print(f"❌ File ID not accessible: {result.get('description')}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ File ID accessibility test error: {e}")
+            return False
 
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
@@ -2314,6 +2380,8 @@ Choose an option:"""
                     # Clean file_id if it was shortened
                     if file_id == 'short':
                         file_id = None
+                    elif file_id == 'none':
+                        file_id = None
                     else:
                         file_id = file_id.replace('_', '-').replace('eq', '=')
                     
@@ -2500,7 +2568,7 @@ Have fun! 🎉"""
             elif data == "back_to_menu":
                 welcome_text = f"""👋 Welcome {first_name}!
 
-🤖 <b>Cross-Platform Telegram Bot</b>
+🤖 <b>GAMERDROID™ V1</b>
 
 📊 Features:
 • 🎮 Game File Browser
@@ -2640,6 +2708,7 @@ Choose an option:"""
             bot_message_id = message['message_id']
             
             print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
+            print(f"📁 File ID: {file_id}")
             
             # Check for duplicates
             regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
@@ -2711,6 +2780,13 @@ This game already exists in the database:"""
                 # For bot-uploaded files, create a unique ID
                 storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
             
+            # CRITICAL: Test if file_id is accessible by other users
+            file_id_accessible = self.test_file_id_accessibility(file_id)
+            
+            if not file_id_accessible:
+                print("⚠️ File ID not universally accessible, will use message forwarding")
+                # We'll rely on message forwarding instead of file_id
+            
             # Prepare game info
             game_info = {
                 'message_id': storage_message_id,
@@ -2722,7 +2798,7 @@ This game already exists in the database:"""
                 'added_by': user_id,
                 'is_uploaded': 1,  # Mark as uploaded by admin
                 'is_forwarded': 1 if is_forwarded else 0,
-                'file_id': file_id,
+                'file_id': file_id if file_id_accessible else None,  # Only store if accessible
                 'bot_message_id': bot_message_id  # Store the actual bot message ID
             }
             
@@ -2754,6 +2830,7 @@ This game already exists in the database:"""
             # Send confirmation
             size = self.format_file_size(file_size)
             source_type = "Channel Forward" if original_message_id else "Direct Upload"
+            file_access = "✅ Universal Access" if file_id_accessible else "⚠️ Forwarding Required"
             
             confirm_text = f"""✅ Game file added successfully!{forward_info}
 
@@ -2763,6 +2840,7 @@ This game already exists in the database:"""
 🗂️ Category: {game_info['category']}
 🕒 Added: {upload_date}
 📮 Source: {source_type}
+🔗 Access: {file_access}
 🆔 Storage ID: {storage_message_id}
 🤖 Bot Message ID: {bot_message_id}
 
@@ -3320,7 +3398,7 @@ Exclusive games available for purchase with Telegram Stars:
         
         # Send the game file
         if game['is_uploaded'] == 1 and game['bot_message_id']:
-            # Bot-uploaded file
+            # Bot-uploaded file - use enhanced file sending
             success = self.send_game_file(chat_id, game['bot_message_id'], game['file_id'], True)
         else:
             # Channel file
@@ -5024,65 +5102,78 @@ Always available!
             print(f"❌ Bot games scan error: {e}")
             return 0
 
-    # ==================== IMPROVED FILE SENDING METHODS ====================
+    # ==================== ENHANCED FILE SENDING METHODS ====================
     
     def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
+        """Universal file sending that works for all users"""
         try:
-            print(f"📤 Sending game file: msg_id={message_id}, is_bot_file={is_bot_file}, file_id={file_id}")
+            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, is_bot_file={is_bot_file}")
             
-            if is_bot_file:
-                # For bot-uploaded files, forward from the bot's chat
-                url = self.base_url + "forwardMessage"
+            # PRIORITY 1: Direct file_id send (should work for bot-uploaded files)
+            if file_id and file_id != 'short' and file_id != 'none':
+                print(f"🔄 Attempting direct file_id send: {file_id[:20]}...")
+                if self.send_document_directly(chat_id, file_id):
+                    print("✅ Successfully sent via direct file_id")
+                    return True
+            
+            # PRIORITY 2: For bot-uploaded files, try to get fresh file_id
+            if is_bot_file and message_id:
+                print("🔄 Getting fresh file_id from bot message...")
+                fresh_file_id = self.get_file_id_from_bot_message(message_id)
+                if fresh_file_id and self.send_document_directly(chat_id, fresh_file_id):
+                    print("✅ Successfully sent via fresh file_id")
+                    return True
+            
+            # PRIORITY 3: copyMessage fallback for bot files
+            if is_bot_file and message_id:
+                print("🔄 Attempting copyMessage for bot file...")
+                url = self.base_url + "copyMessage"
                 data = {
                     "chat_id": chat_id,
-                    "from_chat_id": chat_id,  # Important: forward from current chat
+                    "from_chat_id": chat_id,  # Copy from user's chat
                     "message_id": message_id
                 }
-                
                 response = requests.post(url, data=data, timeout=30)
                 result = response.json()
                 
                 if result.get('ok'):
-                    print(f"✅ Successfully forwarded bot file {message_id}")
+                    print("✅ Successfully sent via copyMessage")
                     return True
                 else:
-                    print(f"❌ Bot file forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id:
-                        return self.send_document_directly(chat_id, file_id)
-                    return False
+                    print(f"❌ copyMessage failed: {result.get('description')}")
+            
+            # PRIORITY 4: Forward from channel (last resort)
+            print("🔄 Attempting channel forward...")
+            url = self.base_url + "forwardMessage"
+            data = {
+                "chat_id": chat_id,
+                "from_chat_id": self.REQUIRED_CHANNEL,
+                "message_id": message_id
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                print("✅ Successfully forwarded from channel")
+                return True
             else:
-                # For channel files, forward from channel
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": self.REQUIRED_CHANNEL,
-                    "message_id": message_id
-                }
+                error_msg = result.get('description', 'Unknown error')
+                print(f"❌ All send methods failed: {error_msg}")
                 
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print(f"✅ Successfully forwarded channel file {message_id}")
-                    return True
-                else:
-                    print(f"❌ Channel forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id and file_id != 'short':
-                        return self.send_document_directly(chat_id, file_id)
-                    else:
-                        # Try to get file_id from database
-                        cursor = self.conn.cursor()
-                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
-                        result_db = cursor.fetchone()
-                        if result_db and result_db[0]:
-                            return self.send_document_directly(chat_id, result_db[0])
-                    
-                    return False
+                # Final fallback: Notify user
+                self.robust_send_message(
+                    chat_id, 
+                    "❌ Unable to send file. Please contact admin for assistance."
+                )
+                return False
                 
         except Exception as e:
             print(f"❌ Error sending game file: {e}")
+            self.robust_send_message(
+                chat_id, 
+                "❌ Error sending file. Please try again or contact admin."
+            )
             return False
 
     def send_document_directly(self, chat_id, file_id):
@@ -5183,20 +5274,30 @@ Always available!
             
             # Use bot_message_id for uploaded files, channel message_id for channel files
             if game['is_uploaded'] == 1 and game['bot_message_id']:
-                # This is a file uploaded directly to the bot
+                # This is a file uploaded directly to the bot - use enhanced file sending
                 message_id_to_send = game['bot_message_id']
                 is_bot_file = True
+                file_id = game.get('file_id')  # Include file_id for direct send attempt
             else:
-                # This is a file from the channel
+                # This is a file from the channel - use forwarding
                 message_id_to_send = game['message_id']
                 is_bot_file = False
+                file_id = game.get('file_id')
             
-            file_id_clean = str(game['file_id']).replace('-', '_').replace('=', 'eq')
+            # Create safe callback data - preserve file_id
+            file_id_clean = str(file_id).replace('-', '_').replace('=', 'eq') if file_id else 'none'
             callback_data = f"send_game_{message_id_to_send}_{file_id_clean}_{1 if is_bot_file else 0}"
             
-            # Validate callback data length
+            # If callback data is too long, try to shorten filename instead of removing file_id
             if len(callback_data) > 64:
-                callback_data = f"send_game_{message_id_to_send}_short_{1 if is_bot_file else 0}"
+                # Try shorter file_id representation first
+                if file_id and len(file_id) > 20:
+                    file_id_clean = file_id[:10] + "_short"
+                    callback_data = f"send_game_{message_id_to_send}_{file_id_clean}_{1 if is_bot_file else 0}"
+                
+                # If still too long, use minimal approach
+                if len(callback_data) > 64:
+                    callback_data = f"send_game_{message_id_to_send}_short_{1 if is_bot_file else 0}"
             
             keyboard.append([{
                 "text": f"📁 {i}. {button_text}",
