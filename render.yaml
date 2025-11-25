@@ -2,9 +2,9 @@
 version: "1"
 services:
 - type: web
-  name: telegram-game-bot
+  name: telegram-gaming-bot
   runtime: python
-  repo: https://github.com/DarkLord813/telegram-game-bot
+  repo: https://github.com/Johmid/telegram-gaming-bot
   plan: free
   envVars:
   - key: BOT_TOKEN
