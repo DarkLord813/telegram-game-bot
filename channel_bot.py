@@ -9,7 +9,7 @@ import threading
 import os
 import sys
 from flask import Flask, jsonify, request
-from threading import Thread
+from threading import ThreadMedia_fire_Download_Now
 import traceback
 import base64
 from io import BytesIO
@@ -1314,8 +1314,8 @@ class CrossPlatformBot:
         self.base_url = f"https://api.telegram.org/bot{token}/"
         
         # YOUR CHANNEL DETAILS
-        self.REQUIRED_CHANNEL = "@pspgamers5"
-        self.CHANNEL_LINK = "https://t.me/pspgamers5"
+        self.REQUIRED_CHANNEL = "@Media_fire_Download_Now"
+        self.CHANNEL_LINK = "https://t.me/Media_fire_Download_Now"
         
         # ADMIN USER IDs
         self.ADMIN_IDS = [7475473197, 7713987088]
@@ -2428,8 +2428,8 @@ Choose an option:"""
             elif data == "channel_info":
                 channel_info = f"""📢 <b>Channel Information</b>
 
-🏷️ Channel: @pspgamers5
-🔗 Link: https://t.me/pspgamers5
+🏷️ Channel: @Media_fire_Download_Now
+🔗 Link: https://t.me/Media_fire_Download_Now
 📝 Description: PSP Games & More!
 
 🎮 Available Games:
@@ -2472,7 +2472,7 @@ Choose an option:"""
 • 📝 Request Game - Request games not in our collection
 • ⭐ Donate Stars - Support our bot with Telegram Stars
 
-🔗 Channel: @pspgamers5"""
+🔗 Channel: @Media_fire_Download_Now"""
                 self.edit_message(chat_id, message_id, games_text, self.create_games_buttons())
                 
             elif data == "game_files":
@@ -2568,7 +2568,7 @@ Have fun! 🎉"""
             elif data == "back_to_menu":
                 welcome_text = f"""👋 Welcome {first_name}!
 
-🤖 <b>GAMERDROID™ V1</b>
+🤖 <b>ALL GAMES BOT™ V1</b>
 
 📊 Features:
 • 🎮 Game File Browser
@@ -2611,13 +2611,13 @@ Choose an option below:"""
 • ⭐ Stars Donations
 • 🎮 Game Requests
 
-📢 Channel: @pspgamers5
+📢 Channel: @Media_fire_Download_Now
 Choose an option below:"""
                     self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons())
                 else:
                     self.edit_message(chat_id, message_id, 
                                     "❌ You haven't joined the channel yet!\n\n"
-                                    "Please join @pspgamers5 first, then click Verify Join again.",
+                                    "Please join @Media_fire_Download_Now first, then click Verify Join again.",
                                     self.create_channel_buttons())
             
             elif data == "admin_panel":
@@ -6212,7 +6212,7 @@ Type your game name now!"""
             text += f"{i}. <code>{game['file_name']}</code>\n"
             text += f"   📦 {game['file_type']} | 📏 {size} | 🗂️ {game.get('category', 'Unknown')}\n\n"
         
-        text += "🔗 Visit: @pspgamers5"
+        text += "🔗 Visit: @Media_fire_Download_Now"
         return text
 
     def handle_profile(self, chat_id, message_id, user_id, first_name):
@@ -6615,7 +6615,7 @@ After code verification, you'll need to join our channel."""
 • ⭐ Stars Donations
 • 🎮 Game Requests
 
-📢 Channel: @pspgamers5
+📢 Channel: @Media_fire_Download_Now
 Choose an option below:"""
                     self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons())
                 else:
