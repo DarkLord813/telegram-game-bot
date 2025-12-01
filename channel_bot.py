@@ -2907,8 +2907,6 @@ The file is now available in the games browser and search!"""
             # Update cache
             self.update_games_cache()
             
-            print(f"🗑️ Admin {user_id} removed {game_type} game: {game_name} (ID: {game_id})")
-            
             # Trigger backup after removal
             self.backup_after_game_action("Game Removal", game_name)
             
@@ -3242,6 +3240,261 @@ Are you sure you want to remove this game?"""
             
         except Exception as e:
             print(f"❌ Remove confirmation error: {e}")
+            return False
+
+    # ==================== ENHANCED FILE SENDING METHODS ====================
+
+    def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
+        """Universal file sending that works for all users - FIXED VERSION"""
+        try:
+            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, is_bot_file={is_bot_file}")
+            
+            # PRIORITY 1: Direct file_id send (should work for bot-uploaded files)
+            if file_id and file_id not in ['short', 'none']:
+                print(f"🔄 Attempting direct file_id send: {file_id[:20]}...")
+                if self.send_document_directly(chat_id, file_id):
+                    print("✅ Successfully sent via direct file_id")
+                    return True
+            
+            # PRIORITY 2: Try to get file from any admin's chat (for bot-uploaded files)
+            if is_bot_file:
+                print("🔄 Looking for file in admin chats...")
+                for admin_id in self.ADMIN_IDS:
+                    file_id = self.get_file_id_from_admin_chat(message_id, admin_id)
+                    if file_id and self.send_document_directly(chat_id, file_id):
+                        print(f"✅ Found and sent file from admin {admin_id}")
+                        return True
+            
+            # PRIORITY 3: For bot-uploaded files, try to get the file from the bot's own messages
+            if is_bot_file:
+                print("🔄 Getting file from bot's message history...")
+                fresh_file_id = self.get_file_id_from_bot_message(message_id)
+                if fresh_file_id and self.send_document_directly(chat_id, fresh_file_id):
+                    print("✅ Successfully sent via fresh file_id from bot")
+                    return True
+            
+            # PRIORITY 4: Last resort - direct upload fallback
+            if is_bot_file:
+                print("🔄 Falling back to database file retrieval...")
+                game_info = self.get_game_info_by_bot_message_id(message_id)
+                if game_info and 'file_name' in game_info:
+                    # Try to get the file from the original uploader
+                    file_id = self.get_file_from_original_uploader(game_info)
+                    if file_id and self.send_document_directly(chat_id, file_id):
+                        print("✅ Sent via original uploader retrieval")
+                        return True
+            
+            # FINAL FALLBACK: Notify admin about the issue
+            print(f"❌ All send methods failed for message {message_id}")
+            
+            # Send error to user
+            self.robust_send_message(
+                chat_id, 
+                "❌ Unable to send file. The file may have been removed or is inaccessible. "
+                "Please contact an admin for assistance."
+            )
+            
+            # Notify admins about the failed delivery
+            for admin_id in self.ADMIN_IDS:
+                self.robust_send_message(
+                    admin_id,
+                    f"⚠️ File delivery failed\n"
+                    f"User: {chat_id}\n"
+                    f"Message ID: {message_id}\n"
+                    f"Type: {'Bot file' if is_bot_file else 'Channel file'}\n"
+                    f"File may need to be re-uploaded."
+                )
+            
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error sending game file: {e}")
+            self.robust_send_message(
+                chat_id, 
+                "❌ Error sending file. Please try again or contact admin."
+            )
+            return False
+
+    def get_file_id_from_admin_chat(self, message_id, admin_id):
+        """Get file_id from a specific admin's chat"""
+        try:
+            # First try to get the message
+            url = self.base_url + "getMessage"
+            data = {
+                "chat_id": admin_id,
+                "message_id": message_id
+            }
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                message = result['result']
+                if 'document' in message:
+                    file_id = message['document'].get('file_id')
+                    print(f"✅ Found file_id in admin {admin_id}'s chat: {file_id[:20]}...")
+                    return file_id
+                elif 'photo' in message:
+                    # Get the highest quality photo
+                    file_id = message['photo'][-1].get('file_id')
+                    print(f"✅ Found photo file_id in admin {admin_id}'s chat: {file_id[:20]}...")
+                    return file_id
+            
+            # If not found, search through recent messages
+            print(f"🔍 Searching recent messages in admin {admin_id}'s chat...")
+            url = self.base_url + "getUpdates"
+            params = {
+                "timeout": 5,
+                "limit": 20,
+                "offset": -20
+            }
+            response = requests.get(url, params=params, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                for update in result['result']:
+                    if 'message' in update:
+                        msg = update['message']
+                        if msg.get('message_id') == message_id:
+                            if 'document' in msg:
+                                file_id = msg['document'].get('file_id')
+                                print(f"✅ Found file_id via search in admin {admin_id}'s chat: {file_id[:20]}...")
+                                return file_id
+            
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error getting file from admin chat: {e}")
+            return None
+
+    def get_game_info_by_bot_message_id(self, bot_message_id):
+        """Get game info from database using bot_message_id"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT file_name, file_type, file_size, added_by, file_id
+                FROM channel_games 
+                WHERE bot_message_id = ?
+            ''', (bot_message_id,))
+            
+            result = cursor.fetchone()
+            if result:
+                return {
+                    'file_name': result[0],
+                    'file_type': result[1],
+                    'file_size': result[2],
+                    'added_by': result[3],
+                    'file_id': result[4]
+                }
+            return None
+        except Exception as e:
+            print(f"❌ Error getting game info: {e}")
+            return None
+
+    def get_file_from_original_uploader(self, game_info):
+        """Try to get the file from the original uploader"""
+        try:
+            admin_id = game_info.get('added_by')
+            if not admin_id or admin_id == 0:
+                return None
+            
+            print(f"🔍 Asking admin {admin_id} to re-send file: {game_info['file_name']}")
+            
+            # Send a request to the admin to provide the file
+            request_text = f"""🔄 File Access Request
+
+A user is trying to access a file but it's not available:
+
+📁 File: {game_info['file_name']}
+📦 Type: {game_info['file_type']}
+📏 Size: {self.format_file_size(game_info['file_size'])}
+
+Please re-upload this file or provide the file_id:
+<code>/upload {game_info['file_name']}</code>
+
+Or simply forward/send the file to me again."""
+
+            self.robust_send_message(admin_id, request_text)
+            
+            # Return the existing file_id if we have it
+            return game_info.get('file_id')
+            
+        except Exception as e:
+            print(f"❌ Error requesting file from uploader: {e}")
+            return None
+
+    def send_document_directly(self, chat_id, file_id):
+        """Send document directly using file_id with enhanced error handling"""
+        try:
+            print(f"📤 Sending document directly with file_id: {file_id[:30]}...")
+            
+            # First verify the file_id is valid
+            url = self.base_url + "getFile"
+            data = {"file_id": file_id}
+            verify_response = requests.post(url, data=data, timeout=10)
+            verify_result = verify_response.json()
+            
+            if not verify_result.get('ok'):
+                print(f"❌ File_id is invalid: {verify_result.get('description')}")
+                return False
+            
+            # Now send the document
+            url = self.base_url + "sendDocument"
+            data = {
+                "chat_id": chat_id,
+                "document": file_id,
+                "caption": "📥 Here's your requested file!"
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                print(f"✅ Sent document directly to user {chat_id}")
+                return True
+            else:
+                error_msg = result.get('description', 'Unknown error')
+                print(f"❌ Direct send failed: {error_msg}")
+                
+                # Check for specific errors
+                if "file is too big" in error_msg.lower():
+                    print("⚠️ File too big for direct send, trying alternative method...")
+                    return self.send_large_file_fallback(chat_id, file_id)
+                
+                return False
+                
+        except requests.exceptions.Timeout:
+            print("⏰ Timeout sending document")
+            return False
+        except Exception as e:
+            print(f"❌ Error sending document directly: {e}")
+            return False
+
+    def send_large_file_fallback(self, chat_id, file_id):
+        """Alternative method for sending large files"""
+        try:
+            print("🔄 Attempting large file fallback method...")
+            
+            # Get file info first
+            url = self.base_url + "getFile"
+            data = {"file_id": file_id}
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                file_path = result['result']['file_path']
+                file_size = result['result']['file_size']
+                
+                print(f"📁 File size: {file_size} bytes")
+                
+                # For large files, we might need to use a different approach
+                # For now, we'll just return False since Telegram handles large files
+                print("⚠️ Large file detected, using standard send method")
+                return False
+            else:
+                return False
+                
+        except Exception as e:
+            print(f"❌ Large file fallback error: {e}")
             return False
 
     # ==================== PREMIUM GAMES METHODS ====================
@@ -5101,105 +5354,6 @@ Always available!
         except Exception as e:
             print(f"❌ Bot games scan error: {e}")
             return 0
-
-    # ==================== ENHANCED FILE SENDING METHODS ====================
-    
-    def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
-        """Universal file sending that works for all users"""
-        try:
-            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, is_bot_file={is_bot_file}")
-            
-            # PRIORITY 1: Direct file_id send (should work for bot-uploaded files)
-            if file_id and file_id != 'short' and file_id != 'none':
-                print(f"🔄 Attempting direct file_id send: {file_id[:20]}...")
-                if self.send_document_directly(chat_id, file_id):
-                    print("✅ Successfully sent via direct file_id")
-                    return True
-            
-            # PRIORITY 2: For bot-uploaded files, try to get fresh file_id
-            if is_bot_file and message_id:
-                print("🔄 Getting fresh file_id from bot message...")
-                fresh_file_id = self.get_file_id_from_bot_message(message_id)
-                if fresh_file_id and self.send_document_directly(chat_id, fresh_file_id):
-                    print("✅ Successfully sent via fresh file_id")
-                    return True
-            
-            # PRIORITY 3: copyMessage fallback for bot files
-            if is_bot_file and message_id:
-                print("🔄 Attempting copyMessage for bot file...")
-                url = self.base_url + "copyMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": chat_id,  # Copy from user's chat
-                    "message_id": message_id
-                }
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print("✅ Successfully sent via copyMessage")
-                    return True
-                else:
-                    print(f"❌ copyMessage failed: {result.get('description')}")
-            
-            # PRIORITY 4: Forward from channel (last resort)
-            print("🔄 Attempting channel forward...")
-            url = self.base_url + "forwardMessage"
-            data = {
-                "chat_id": chat_id,
-                "from_chat_id": self.REQUIRED_CHANNEL,
-                "message_id": message_id
-            }
-            
-            response = requests.post(url, data=data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                print("✅ Successfully forwarded from channel")
-                return True
-            else:
-                error_msg = result.get('description', 'Unknown error')
-                print(f"❌ All send methods failed: {error_msg}")
-                
-                # Final fallback: Notify user
-                self.robust_send_message(
-                    chat_id, 
-                    "❌ Unable to send file. Please contact admin for assistance."
-                )
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error sending game file: {e}")
-            self.robust_send_message(
-                chat_id, 
-                "❌ Error sending file. Please try again or contact admin."
-            )
-            return False
-
-    def send_document_directly(self, chat_id, file_id):
-        """Send document directly using file_id"""
-        try:
-            print(f"📤 Sending document directly with file_id: {file_id}")
-            
-            url = self.base_url + "sendDocument"
-            data = {
-                "chat_id": chat_id,
-                "document": file_id
-            }
-            
-            response = requests.post(url, data=data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                print(f"✅ Sent document directly using file_id to user {chat_id}")
-                return True
-            else:
-                print(f"❌ Direct send failed: {result.get('description')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error sending document directly: {e}")
-            return False
 
     # ==================== SEARCH GAMES METHODS ====================
     
