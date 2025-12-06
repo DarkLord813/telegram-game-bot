@@ -11,74 +11,44 @@ import sys
 from flask import Flask, jsonify, request
 from threading import Thread
 import traceback
-import base64
 
-print("TELEGRAM BOT - CROSS PLATFORM WITH STARS PAYMENTS")
-print("Using Regular Keyboards + Telegram Stars")
+print("TELEGRAM BOT - GAME STORAGE & FILE SENDING")
+print("Like @manybot with file storage and button-based sending")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
 print("🔍 RENDER DEBUG: Starting initialization...")
-print(f"🔍 DEBUG: Python version: {sys.version}")
-print(f"🔍 DEBUG: Current directory: {os.getcwd()}")
-print(f"🔍 DEBUG: Files in directory: {os.listdir('.')}")
-
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-
-print(f"🔍 DEBUG: BOT_TOKEN exists: {'YES' if BOT_TOKEN else 'NO'}")
 
 if BOT_TOKEN:
     print(f"🔍 DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
-    print(f"🔍 DEBUG: Token length: {len(BOT_TOKEN)}")
 else:
-    print("❌ DEBUG: BOT_TOKEN is MISSING! Check Render Environment Variables")
+    print("❌ DEBUG: BOT_TOKEN is MISSING!")
 
 # Health check server
 app = Flask(__name__)
 
 @app.route('/health')
 def health_check():
-    """Enhanced health check endpoint for Render monitoring"""
+    """Health check endpoint"""
     try:
-        bot_status = 'unknown'
-        if 'bot' in globals() and hasattr(bot, 'test_bot_connection'):
-            bot_status = 'healthy' if bot.test_bot_connection() else 'unhealthy'
-        
         health_status = {
             'status': 'healthy',
             'timestamp': time.time(),
-            'service': 'telegram-game-bot',
-            'version': '1.0.0',
-            'bot_status': bot_status,
-            'checks': {
-                'bot_online': {'status': bot_status, 'message': f'Bot is {bot_status}'},
-                'system': {'status': 'healthy', 'message': 'System operational'},
-                'database': {'status': 'healthy', 'message': 'Database connected'}
-            }
+            'service': 'telegram-game-bot'
         }
         return jsonify(health_status), 200
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e),
-            'timestamp': time.time(),
-            'bot_status': 'error'
-        }), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/')
 def home():
-    """Root endpoint"""
-    return jsonify({
-        'service': 'Telegram Game Bot with Stars',
-        'status': 'running',
-        'version': '1.0.0'
-    })
+    return jsonify({'service': 'Telegram Game Bot', 'status': 'running'})
 
 def run_health_server():
-    """Run the health check server with error handling"""
+    """Run the health check server"""
     try:
         port = int(os.environ.get('PORT', 8080))
-        print(f"🔄 Starting health server on port {port}")
         app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
     except Exception as e:
         print(f"❌ Health server error: {e}")
@@ -86,486 +56,43 @@ def run_health_server():
         run_health_server()
 
 def start_health_check():
-    """Start health check server in background with restart capability"""
+    """Start health check server in background"""
     def health_wrapper():
         while True:
             try:
                 run_health_server()
             except Exception as e:
-                print(f"❌ Health server crashed, restarting: {e}")
+                print(f"❌ Health server crashed: {e}")
                 time.sleep(10)
     
     t = Thread(target=health_wrapper, daemon=True)
     t.start()
-    print("✅ Health check server started on port 8080")
-
-# ==================== TELEGRAM STARS PAYMENT SYSTEM ====================
-
-class TelegramStarsSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_stars_database()
-        print("✅ Telegram Stars system initialized!")
-        
-    def setup_stars_database(self):
-        """Setup stars payments database"""
-        try:
-            cursor = self.bot.conn.cursor()
-            
-            # Stars transactions table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS stars_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    user_name TEXT,
-                    stars_amount INTEGER,
-                    usd_amount REAL,
-                    description TEXT,
-                    telegram_star_amount INTEGER,
-                    transaction_id TEXT UNIQUE,
-                    payment_status TEXT DEFAULT 'pending',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    completed_at DATETIME
-                )
-            ''')
-            
-            # Stars balance table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS stars_balance (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    total_stars_earned INTEGER DEFAULT 0,
-                    total_usd_earned REAL DEFAULT 0.0,
-                    available_stars INTEGER DEFAULT 0,
-                    available_usd REAL DEFAULT 0.0,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Premium games table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS premium_games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_name TEXT,
-                    file_type TEXT,
-                    file_size INTEGER,
-                    stars_price INTEGER DEFAULT 0,
-                    description TEXT,
-                    upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    file_id TEXT,
-                    added_by INTEGER DEFAULT 0,
-                    is_active INTEGER DEFAULT 1
-                )
-            ''')
-            
-            # Premium purchases table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS premium_purchases (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    game_id INTEGER,
-                    stars_paid INTEGER,
-                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    transaction_id TEXT,
-                    status TEXT DEFAULT 'completed'
-                )
-            ''')
-            
-            # Initialize balance if not exists
-            cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
-            
-            self.bot.conn.commit()
-            print("✅ Telegram Stars database setup complete!")
-            
-        except Exception as e:
-            print(f"❌ Stars database setup error: {e}")
-    
-    def create_stars_invoice(self, user_id, chat_id, stars_amount, description="Donation"):
-        """Create Telegram Stars payment invoice"""
-        try:
-            # Generate unique invoice payload
-            invoice_payload = f"stars_{user_id}_{int(time.time())}"
-            
-            # Stars pricing (approximate conversion: 1 Star ≈ $0.01)
-            usd_amount = stars_amount * 0.01
-            
-            # Prepare stars invoice data
-            prices = [{"label": f"{stars_amount} Stars", "amount": stars_amount}]
-            
-            invoice_data = {
-                "chat_id": chat_id,
-                "title": "🌟 Bot Stars Donation",
-                "description": description,
-                "payload": invoice_payload,
-                "currency": "XTR",  # Telegram Stars currency
-                "prices": json.dumps(prices),
-                "start_parameter": "stars_donation",
-                "need_name": False,
-                "need_phone_number": False,
-                "need_email": False,
-                "need_shipping_address": False,
-                "is_flexible": False
-            }
-            
-            print(f"⭐ Creating Stars invoice for {stars_amount} stars (${usd_amount:.2f})")
-            
-            # Send invoice via Telegram API
-            url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                # Store transaction in database
-                cursor = self.bot.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO stars_transactions 
-                    (user_id, user_name, stars_amount, usd_amount, description, transaction_id, payment_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    user_id,
-                    self.bot.get_user_info(user_id)['first_name'],
-                    stars_amount,
-                    usd_amount,
-                    description,
-                    invoice_payload,
-                    'pending'
-                ))
-                
-                self.bot.conn.commit()
-                print(f"✅ Stars invoice created for user {user_id}: {stars_amount} stars")
-                return True, invoice_payload
-            else:
-                error_msg = result.get('description', 'Unknown error')
-                print(f"❌ Error creating Stars invoice: {error_msg}")
-                return False, None
-            
-        except Exception as e:
-            print(f"❌ Error creating Stars invoice: {e}")
-            traceback.print_exc()
-            return False, None
-    
-    def create_premium_game_invoice(self, user_id, chat_id, stars_amount, game_name, game_id):
-        """Create Stars invoice for premium game purchase"""
-        try:
-            invoice_payload = f"premium_game_{game_id}_{user_id}_{int(time.time())}"
-            usd_amount = stars_amount * 0.01
-            
-            prices = [{"label": f"Premium Game: {game_name}", "amount": stars_amount}]
-            
-            invoice_data = {
-                "chat_id": chat_id,
-                "title": f"🎮 {game_name}",
-                "description": f"Premium Game Purchase - {stars_amount} Stars",
-                "payload": invoice_payload,
-                "currency": "XTR",
-                "prices": json.dumps(prices),
-                "start_parameter": f"premium_game_{game_id}",
-                "need_name": False,
-                "need_phone_number": False,
-                "need_email": False,
-                "need_shipping_address": False,
-                "is_flexible": False
-            }
-            
-            print(f"⭐ Creating premium game invoice: {game_name} for {stars_amount} stars")
-            
-            url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                # Store premium purchase record
-                cursor = self.bot.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO premium_purchases 
-                    (user_id, game_id, stars_paid, transaction_id, status)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, game_id, stars_amount, invoice_payload, 'pending'))
-                
-                self.bot.conn.commit()
-                print(f"✅ Premium game invoice created: {game_name} for user {user_id}")
-                return True, invoice_payload
-            else:
-                error_msg = result.get('description', 'Unknown error')
-                print(f"❌ Error creating premium game invoice: {error_msg}")
-                return False, None
-                
-        except Exception as e:
-            print(f"❌ Error creating premium game invoice: {e}")
-            traceback.print_exc()
-            return False, None
-    
-    def get_balance(self):
-        """Get current stars balance"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('SELECT * FROM stars_balance WHERE id = 1')
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'total_stars_earned': result[1] or 0,
-                    'total_usd_earned': result[2] or 0.0,
-                    'available_stars': result[3] or 0,
-                    'available_usd': result[4] or 0.0,
-                    'last_updated': result[5]
-                }
-            return {'available_stars': 0, 'available_usd': 0.0}
-        except Exception as e:
-            print(f"❌ Error getting stars balance: {e}")
-            return {'available_stars': 0, 'available_usd': 0.0}
-    
-    def get_recent_transactions(self, limit=5):
-        """Get recent stars transactions"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT user_name, stars_amount, usd_amount, payment_status, created_at 
-                FROM stars_transactions 
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting recent stars transactions: {e}")
-            return []
-    
-    def complete_premium_purchase(self, transaction_id):
-        """Mark premium purchase as completed"""
-        try:
-            cursor = self.bot.conn.cursor()
-            
-            # Get purchase details
-            cursor.execute('''
-                SELECT user_id, game_id, stars_paid FROM premium_purchases 
-                WHERE transaction_id = ? AND status = 'pending'
-            ''', (transaction_id,))
-            purchase = cursor.fetchone()
-            
-            if not purchase:
-                return False
-                
-            user_id, game_id, stars_paid = purchase
-            
-            # Update purchase status
-            cursor.execute('''
-                UPDATE premium_purchases 
-                SET status = 'completed' 
-                WHERE transaction_id = ?
-            ''', (transaction_id,))
-            
-            # Update stars balance
-            cursor.execute('''
-                UPDATE stars_balance 
-                SET total_stars_earned = total_stars_earned + ?,
-                    total_usd_earned = total_usd_earned + ?,
-                    available_stars = available_stars + ?,
-                    available_usd = available_usd + ?,
-                    last_updated = CURRENT_TIMESTAMP
-                WHERE id = 1
-            ''', (stars_paid, stars_paid * 0.01, stars_paid, stars_paid * 0.01))
-            
-            # Update transaction status
-            cursor.execute('''
-                UPDATE stars_transactions 
-                SET payment_status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP
-                WHERE transaction_id = ?
-            ''', (transaction_id,))
-            
-            self.bot.conn.commit()
-            
-            # Send game file to user
-            game = self.get_premium_game_by_id(game_id)
-            if game and game['file_id']:
-                self.bot.send_document_directly(user_id, game['file_id'])
-            
-            return True
-        except Exception as e:
-            print(f"❌ Error completing premium purchase: {e}")
-            return False
-    
-    def add_premium_game(self, file_name, file_type, file_size, stars_price, description, file_id, added_by):
-        """Add a premium game to database"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                INSERT INTO premium_games 
-                (file_name, file_type, file_size, stars_price, description, file_id, added_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (file_name, file_type, file_size, stars_price, description, file_id, added_by))
-            
-            self.bot.conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            print(f"❌ Error adding premium game: {e}")
-            return False
-    
-    def get_premium_games(self, limit=20):
-        """Get all premium games"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, file_name, file_type, file_size, stars_price, description 
-                FROM premium_games 
-                WHERE is_active = 1
-                ORDER BY upload_date DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting premium games: {e}")
-            return []
-    
-    def get_premium_game_by_id(self, game_id):
-        """Get premium game by ID"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, file_name, file_type, file_size, stars_price, description, file_id
-                FROM premium_games 
-                WHERE id = ? AND is_active = 1
-            ''', (game_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'id': result[0],
-                    'file_name': result[1],
-                    'file_type': result[2],
-                    'file_size': result[3],
-                    'stars_price': result[4],
-                    'description': result[5],
-                    'file_id': result[6]
-                }
-            return None
-        except Exception as e:
-            print(f"❌ Error getting premium game by ID: {e}")
-            return None
-    
-    def has_user_purchased_game(self, user_id, game_id):
-        """Check if user has already purchased a premium game"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id FROM premium_purchases 
-                WHERE user_id = ? AND game_id = ? AND status = 'completed'
-            ''', (user_id, game_id))
-            return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"❌ Error checking user purchase: {e}")
-            return False
-    
-    def handle_pre_checkout(self, pre_checkout_query_id):
-        """Handle pre-checkout query"""
-        try:
-            url = self.bot.base_url + "answerPreCheckoutQuery"
-            data = {
-                "pre_checkout_query_id": pre_checkout_query_id,
-                "ok": True
-            }
-            response = requests.post(url, data=data, timeout=10)
-            return response.json().get('ok', False)
-        except Exception as e:
-            print(f"❌ Error handling pre-checkout: {e}")
-            return False
-    
-    def handle_successful_payment(self, successful_payment):
-        """Handle successful payment"""
-        try:
-            invoice_payload = successful_payment.get('invoice_payload', '')
-            
-            if invoice_payload.startswith('premium_game_'):
-                # This is a premium game purchase
-                return self.complete_premium_purchase(invoice_payload)
-            elif invoice_payload.startswith('stars_'):
-                # This is a stars donation
-                return self.complete_stars_donation(invoice_payload)
-            
-            return False
-        except Exception as e:
-            print(f"❌ Error handling successful payment: {e}")
-            return False
-    
-    def complete_stars_donation(self, transaction_id):
-        """Complete stars donation"""
-        try:
-            cursor = self.bot.conn.cursor()
-            
-            # Update transaction status
-            cursor.execute('''
-                UPDATE stars_transactions 
-                SET payment_status = 'completed',
-                    completed_at = CURRENT_TIMESTAMP
-                WHERE transaction_id = ?
-            ''', (transaction_id,))
-            
-            # Update balance
-            cursor.execute('''
-                SELECT stars_amount FROM stars_transactions 
-                WHERE transaction_id = ?
-            ''', (transaction_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                stars_amount = result[0]
-                cursor.execute('''
-                    UPDATE stars_balance 
-                    SET total_stars_earned = total_stars_earned + ?,
-                        total_usd_earned = total_usd_earned + ?,
-                        available_stars = available_stars + ?,
-                        available_usd = available_usd + ?,
-                        last_updated = CURRENT_TIMESTAMP
-                    WHERE id = 1
-                ''', (stars_amount, stars_amount * 0.01, stars_amount, stars_amount * 0.01))
-            
-            self.bot.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error completing stars donation: {e}")
-            return False
+    print("✅ Health check server started")
 
 # ==================== MAIN BOT CLASS ====================
 
-class CrossPlatformBot:
+class TelegramGameBot:
     def __init__(self, token):
         if not token:
-            print("❌ CRITICAL: No BOT_TOKEN provided!")
             raise ValueError("BOT_TOKEN is required")
         
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}/"
-        
-        # YOUR CHANNEL DETAILS
-        self.REQUIRED_CHANNEL = "@pspgamers5"
-        self.CHANNEL_LINK = "https://t.me/pspgamers5"
         
         # ADMIN USER IDs
         self.ADMIN_IDS = [7475473197, 7713987088]
         
         # Session management
         self.user_sessions = {}
-        self.guess_games = {}
-        self.spin_games = {}
-        
-        # Telegram Stars system
-        self.stars_system = TelegramStarsSystem(self)
-        
-        # CRASH PROTECTION
-        self.last_restart = time.time()
-        self.error_count = 0
+        self.temp_files = {}  # Store temporary file info
         
         self.setup_database()
-        self.games_cache = {}
-        self.is_scanning = False
-        
         print("✅ Bot system ready!")
-        print(f"📊 Monitoring channel: {self.REQUIRED_CHANNEL}")
-        print("⭐ Telegram Stars payments system enabled")
-        print("💰 Premium games system enabled")
     
     def setup_database(self):
+        """Setup database with proper tables"""
         try:
-            self.conn = sqlite3.connect('telegram_bot.db', check_same_thread=False)
+            self.conn = sqlite3.connect('game_bot.db', check_same_thread=False)
             cursor = self.conn.cursor()
             
             # Users table
@@ -574,58 +101,61 @@ class CrossPlatformBot:
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
-                    is_verified INTEGER DEFAULT 0,
-                    joined_channel INTEGER DEFAULT 0,
-                    verification_code TEXT,
-                    code_expires DATETIME,
+                    is_active INTEGER DEFAULT 1,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Regular games table
+            # Games table - stores ALL uploaded files with file_id
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS channel_games (
+                CREATE TABLE IF NOT EXISTS games (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
+                    file_id TEXT UNIQUE,
+                    file_unique_id TEXT UNIQUE,
                     file_name TEXT,
                     file_type TEXT,
                     file_size INTEGER,
-                    upload_date DATETIME,
+                    mime_type TEXT,
                     category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
-                    is_uploaded INTEGER DEFAULT 0,
-                    is_forwarded INTEGER DEFAULT 0,
-                    file_id TEXT,
-                    bot_message_id INTEGER
+                    description TEXT,
+                    added_by INTEGER,
+                    upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_active INTEGER DEFAULT 1,
+                    download_count INTEGER DEFAULT 0,
+                    last_downloaded DATETIME
                 )
             ''')
             
+            # Categories table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE,
+                    emoji TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Initialize default categories
+            default_categories = [
+                ('PSP Games', '🎮'),
+                ('Android Games', '📱'),
+                ('PC Games', '💻'),
+                ('Emulators', '⚙️'),
+                ('Tools', '🛠️'),
+                ('Other', '📦')
+            ]
+            
+            for name, emoji in default_categories:
+                cursor.execute('INSERT OR IGNORE INTO categories (name, emoji) VALUES (?, ?)', (name, emoji))
+            
             self.conn.commit()
-            print("✅ Database setup successful!")
+            print("✅ Database setup complete!")
             
         except Exception as e:
             print(f"❌ Database error: {e}")
             self.conn = sqlite3.connect(':memory:', check_same_thread=False)
             self.setup_database()
-    
-    def test_bot_connection(self):
-        try:
-            url = self.base_url + "getMe"
-            response = requests.get(url, timeout=10)
-            data = response.json()
-            
-            if data.get('ok'):
-                bot_name = data['result']['first_name']
-                print(f"✅ Bot connected: {bot_name}")
-                return True
-            else:
-                print(f"❌ Invalid bot token: {data.get('description')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Connection error: {e}")
-            return False
     
     def send_message(self, chat_id, text, keyboard=None):
         """Send message with optional keyboard"""
@@ -644,373 +174,398 @@ class CrossPlatformBot:
                     "one_time_keyboard": False
                 })
             else:
-                # Remove keyboard if None
                 data["reply_markup"] = json.dumps({"remove_keyboard": True})
             
             response = requests.post(url, data=data, timeout=15)
-            return response.json().get('ok', False)
+            return response.json()
             
         except Exception as e:
             print(f"❌ Send message error: {e}")
-            return False
+            return None
     
-    def send_document_directly(self, chat_id, file_id, caption=None):
-        """Send document directly using file_id"""
+    def send_document(self, chat_id, file_id, caption=None):
+        """Send document using file_id (like @manybot)"""
         try:
             url = self.base_url + "sendDocument"
             data = {
                 "chat_id": chat_id,
                 "document": file_id,
-                "caption": caption or "📥 Here's your requested file!",
+                "caption": caption or "",
+                "parse_mode": "HTML"
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                # Update download count
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE games 
+                    SET download_count = download_count + 1,
+                        last_downloaded = CURRENT_TIMESTAMP
+                    WHERE file_id = ?
+                ''', (file_id,))
+                self.conn.commit()
+                return True
+            else:
+                print(f"❌ Send document error: {result.get('description')}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Send document exception: {e}")
+            return False
+    
+    def send_photo(self, chat_id, file_id, caption=None):
+        """Send photo using file_id"""
+        try:
+            url = self.base_url + "sendPhoto"
+            data = {
+                "chat_id": chat_id,
+                "photo": file_id,
+                "caption": caption or "",
                 "parse_mode": "HTML"
             }
             
             response = requests.post(url, data=data, timeout=30)
             return response.json().get('ok', False)
-            
+                
         except Exception as e:
-            print(f"❌ Send document error: {e}")
+            print(f"❌ Send photo exception: {e}")
             return False
     
     def send_main_menu(self, chat_id, user_id, first_name):
         """Send main menu"""
         keyboard = [
-            ["📊 Profile", "🕒 Time"],
-            ["📢 Channel", "🎮 Games"],
-            ["🔍 Search Games", "📝 Request Game"],
-            ["⭐ Stars Menu", "🎯 Mini Games"]
+            ["🎮 Browse Games", "🔍 Search Games"],
+            ["📁 My Uploads", "📊 Stats"],
+            ["📢 Channel", "ℹ️ Help"]
         ]
         
         # Add admin menu for admins
         if self.is_admin(user_id):
             keyboard.append(["👑 Admin Panel"])
         
-        welcome_text = f"""👋 Welcome {first_name}!
+        welcome_text = f"""👋 Welcome <b>{first_name}</b>!
 
-🤖 <b>GAMERDROID™ V1</b>
+🤖 <b>Game Storage Bot</b>
+Like @manybot for game files!
 
-⭐ <b>Telegram Stars Payments Enabled</b>
-💰 <b>Premium Games Available</b>
+📁 <b>Features:</b>
+• Browse games by category
+• Search for specific games
+• Upload your own games
+• One-click file downloads
+• Fast file sending via file_id
 
-Choose an option below:"""
+Choose an option:"""
         
         return self.send_message(chat_id, welcome_text, keyboard)
     
-    def send_games_menu(self, chat_id):
-        """Send games menu"""
-        regular_games = len(self.games_cache.get('all', []))
-        premium_games = len(self.stars_system.get_premium_games())
+    def send_categories_menu(self, chat_id):
+        """Send categories menu"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT name, emoji FROM categories ORDER BY name')
+        categories = cursor.fetchall()
         
-        keyboard = [
-            ["📁 Game Files", "💰 Premium Games"],
-            ["🎯 Mini Games", "🔍 Search Games"],
-            ["📝 Request Game", "⭐ Stars Menu"],
-            ["🔙 Back to Main Menu"]
-        ]
+        keyboard = []
+        row = []
         
-        games_text = f"""🎮 <b>Games Section</b>
+        for i, (name, emoji) in enumerate(categories):
+            row.append(f"{emoji} {name}")
+            if len(row) == 2 or i == len(categories) - 1:
+                keyboard.append(row.copy())
+                row = []
+        
+        keyboard.append(["🔙 Main Menu"])
+        
+        categories_text = """🎮 <b>Game Categories</b>
 
-📊 Total Games: {regular_games + premium_games}
-• 🆓 Regular: {regular_games}
-• 💰 Premium: {premium_games}
+Browse games by category:
 
-⭐ Premium games require Telegram Stars
+"""
+        for name, emoji in categories:
+            cursor.execute('SELECT COUNT(*) FROM games WHERE category = ? AND is_active = 1', (name,))
+            count = cursor.fetchone()[0]
+            categories_text += f"{emoji} <b>{name}</b> - {count} games\n"
+        
+        categories_text += "\nSelect a category to browse games:"
+        
+        return self.send_message(chat_id, categories_text, keyboard)
+    
+    def send_games_in_category(self, chat_id, category_name, page=0):
+        """Send games list for a category with pagination"""
+        cursor = self.conn.cursor()
+        
+        # Get games in this category
+        cursor.execute('''
+            SELECT id, file_name, description, download_count 
+            FROM games 
+            WHERE category = ? AND is_active = 1 
+            ORDER BY upload_date DESC 
+            LIMIT 10 OFFSET ?
+        ''', (category_name, page * 10))
+        
+        games = cursor.fetchall()
+        
+        if not games:
+            keyboard = [["🔙 Categories"]]
+            self.send_message(chat_id, f"❌ No games found in {category_name} category.", keyboard)
+            return
+        
+        # Count total games
+        cursor.execute('SELECT COUNT(*) FROM games WHERE category = ? AND is_active = 1', (category_name,))
+        total_games = cursor.fetchone()[0]
+        
+        # Create games list text
+        games_text = f"""🎮 <b>{category_name}</b>
 
-Choose an option:"""
+📊 Total games: {total_games}
+📄 Page {page + 1} of {(total_games + 9) // 10}
+
+"""
+        for i, (game_id, file_name, description, download_count) in enumerate(games, 1):
+            games_text += f"{i}. <b>{file_name}</b>\n"
+            if description:
+                games_text += f"   📝 {description}\n"
+            games_text += f"   📥 {download_count} downloads\n\n"
+        
+        # Create keyboard with games as buttons
+        keyboard = []
+        row = []
+        
+        for i, (game_id, file_name, description, download_count) in enumerate(games, 1):
+            button_text = f"📁 {i}. {file_name[:15]}{'...' if len(file_name) > 15 else ''}"
+            row.append(button_text)
+            if len(row) == 2 or i == len(games):
+                keyboard.append(row.copy())
+                row = []
+        
+        # Add navigation buttons
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append("⬅️ Previous")
+        
+        if (page + 1) * 10 < total_games:
+            nav_buttons.append("Next ➡️")
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        keyboard.append(["🔙 Categories", "🔍 Search"])
+        
+        # Store games info for this user session
+        self.user_sessions[chat_id] = {
+            'menu': 'category_games',
+            'category': category_name,
+            'page': page,
+            'games': games
+        }
         
         return self.send_message(chat_id, games_text, keyboard)
     
-    def send_game_files_menu(self, chat_id):
-        """Send game files menu"""
-        keyboard = [
-            ["📦 ZIP Files", "🗜️ 7Z Files"],
-            ["💿 ISO Files", "📱 APK Files"],
-            ["🎮 PSP Games", "📋 All Files"],
-            ["💰 Premium Games", "🔍 Search Games"],
-            ["🔙 Back to Games"]
-        ]
+    def send_search_menu(self, chat_id):
+        """Send search menu"""
+        keyboard = [["🔙 Main Menu"]]
         
-        files_text = """📁 <b>Game Files Browser</b>
+        search_text = """🔍 <b>Search Games</b>
 
-Browse games by file type:
+Type the name of the game you're looking for.
 
-• 📦 ZIP Files - Compressed game archives
-• 🗜️ 7Z Files - 7-Zip compressed archives  
-• 💿 ISO Files - Disc image files
-• 📱 APK Files - Android applications
-• 🎮 PSP Games - PSP specific formats
-• 📋 All Files - Complete game list
-• 💰 Premium Games - Paid games with Stars
+Examples:
+• "GTA"
+• "God of War"
+• "PSP"
+• "Android"
 
-Choose an option:"""
+You can search by filename, description, or category.
+
+Type your search query now:"""
         
-        return self.send_message(chat_id, files_text, keyboard)
+        self.user_sessions[chat_id] = {'menu': 'search', 'state': 'waiting_query'}
+        return self.send_message(chat_id, search_text, keyboard)
     
-    def send_premium_games_menu(self, chat_id, user_id):
-        """Send premium games menu"""
-        premium_games = self.stars_system.get_premium_games()
+    def handle_search(self, chat_id, query):
+        """Handle game search"""
+        cursor = self.conn.cursor()
         
-        if not premium_games:
-            keyboard = [
-                ["🆓 Regular Games"],
-                ["⭐ Stars Menu", "🎮 Games Menu"],
-                ["🔙 Main Menu"]
-            ]
-            
-            premium_text = """💰 <b>Premium Games</b>
+        # Search in filename, description, and category
+        cursor.execute('''
+            SELECT id, file_name, category, description, download_count 
+            FROM games 
+            WHERE (file_name LIKE ? OR description LIKE ? OR category LIKE ?) 
+            AND is_active = 1 
+            ORDER BY download_count DESC 
+            LIMIT 20
+        ''', (f'%{query}%', f'%{query}%', f'%{query}%'))
+        
+        results = cursor.fetchall()
+        
+        if not results:
+            keyboard = [["🔍 Search Again", "🔙 Main Menu"]]
+            self.send_message(chat_id, f"❌ No games found for: <code>{query}</code>", keyboard)
+            return
+        
+        # Create results text
+        results_text = f"""🔍 <b>Search Results for:</b> <code>{query}</code>
 
-No premium games available yet.
-
-Check back later for exclusive games that you can purchase with Telegram Stars!"""
-        else:
-            keyboard = []
-            
-            # Create buttons for premium games (max 4 per row)
-            for i in range(0, len(premium_games[:8]), 2):
-                row = []
-                for j in range(2):
-                    if i + j < len(premium_games):
-                        game_id, file_name, file_type, file_size, stars_price, description = premium_games[i + j]
-                        short_name = file_name[:15] + "..." if len(file_name) > 15 else file_name
-                        row.append(f"💰 {short_name}")
-                if row:
-                    keyboard.append(row)
-            
-            keyboard.extend([
-                ["🆓 Regular Games"],
-                ["⭐ Stars Menu", "🎮 Games Menu"],
-                ["🔙 Main Menu"]
-            ])
-            
-            premium_text = """💰 <b>Premium Games</b>
-
-Exclusive games available for purchase with Telegram Stars:
+📊 Found: {len(results)} games
 
 """
-            for i, game in enumerate(premium_games[:5], 1):
-                game_id, file_name, file_type, file_size, stars_price, description = game
-                size = self.format_file_size(file_size)
-                
-                premium_text += f"\n{i}. <b>{file_name}</b>"
-                premium_text += f"\n   ⭐ {stars_price} Stars | 📦 {file_type} | 📏 {size}"
-                premium_text += f"\n   └─ Type: <code>/premium_{game_id}</code>\n"
-            
-            if len(premium_games) > 5:
-                premium_text += f"\n📋 ... and {len(premium_games) - 5} more premium games"
-            
-            premium_text += "\n\n💡 <i>To purchase, type /premium_[ID] or click the game name</i>"
+        for i, (game_id, file_name, category, description, download_count) in enumerate(results[:10], 1):
+            results_text += f"{i}. <b>{file_name}</b>\n"
+            results_text += f"   📁 {category} | 📥 {download_count} downloads\n"
+            if description:
+                results_text += f"   📝 {description[:50]}{'...' if len(description) > 50 else ''}\n"
+            results_text += f"   └─ Click <b>Game {i}</b> to download\n\n"
         
-        return self.send_message(chat_id, premium_text, keyboard)
-    
-    def send_stars_menu(self, chat_id, user_id):
-        """Send Telegram Stars menu"""
-        balance = self.stars_system.get_balance()
+        if len(results) > 10:
+            results_text += f"📋 ... and {len(results) - 10} more games\n\n"
         
-        keyboard = [
-            ["⭐ 50 Stars", "⭐ 100 Stars"],
-            ["⭐ 500 Stars", "⭐ 1000 Stars"],
-            ["💫 Custom Amount", "📊 Stars Stats"],
-            ["💰 Premium Games", "🎮 Games Menu"],
-            ["🔙 Main Menu"]
-        ]
+        # Create keyboard with results as buttons
+        keyboard = []
+        row = []
         
-        stars_text = """⭐ <b>Telegram Stars</b>
-
-Support our bot with Telegram Stars!
-
-🌟 <b>Why Donate Stars?</b>
-• Keep the bot running 24/7
-• Support new features development  
-• Help cover server costs
-• Purchase premium games
-
-💫 <b>How Stars Work:</b>
-1. Choose stars amount below
-2. Complete secure payment via Telegram
-3. Stars go directly to support development
-4. Get instant confirmation!
-
-💰 <b>Conversion:</b> 1 Star ≈ $0.01
-
-📊 <b>Stars Stats:</b>"""
+        for i, (game_id, file_name, category, description, download_count) in enumerate(results[:10], 1):
+            button_text = f"🎮 Game {i}"
+            row.append(button_text)
+            if len(row) == 2 or i == min(10, len(results)):
+                keyboard.append(row.copy())
+                row = []
         
-        stars_text += f"\n• Total Stars Received: <b>{balance['total_stars_earned']} ⭐</b>"
-        stars_text += f"\n• Total USD Value: <b>${balance['total_usd_earned']:.2f}</b>"
+        keyboard.append(["🔍 Search Again", "🔙 Main Menu"])
         
-        recent_transactions = self.stars_system.get_recent_transactions(3)
-        if recent_transactions:
-            stars_text += "\n\n🎉 <b>Recent Donations:</b>"
-            for transaction in recent_transactions:
-                donor_name, stars_amount, usd_amount, status, created_at = transaction
-                date_str = datetime.fromisoformat(created_at).strftime('%m/%d')
-                status_icon = "✅" if status == 'completed' else "⏳"
-                stars_text += f"\n• {donor_name}: {status_icon} <b>{stars_amount} ⭐</b>"
+        # Store search results
+        self.user_sessions[chat_id] = {
+            'menu': 'search_results',
+            'query': query,
+            'results': results
+        }
         
-        stars_text += "\n\nThank you for considering supporting us! 🙏"
-        
-        return self.send_message(chat_id, stars_text, keyboard)
+        return self.send_message(chat_id, results_text, keyboard)
     
     def send_admin_menu(self, chat_id):
         """Send admin menu"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM games')
+        total_games = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT COUNT(*) FROM games WHERE added_by = ?', (chat_id,))
+        my_games = cursor.fetchone()[0]
+        
         keyboard = [
-            ["📤 Upload Games", "💰 Upload Premium"],
-            ["🗑️ Remove Games", "📢 Broadcast"],
-            ["📊 Upload Stats", "🔄 Update Cache"],
-            ["⭐ Stars Stats", "🔍 Scan Games"],
-            ["🔙 Back to Main Menu"]
+            ["📤 Upload Game", "🗑️ My Games"],
+            ["📊 All Games", "🏷️ Categories"],
+            ["🔙 Main Menu"]
         ]
         
-        admin_text = """👑 <b>Admin Panel</b>
+        admin_text = f"""👑 <b>Admin Panel</b>
 
-Admin Features:
-• 📤 Upload regular games (free)
-• 💰 Upload premium games (Stars)
-• 🗑️ Remove games  
-• 📢 Broadcast messages
-• 📊 View statistics
-• 🔄 Update cache
-• ⭐ View Stars statistics
-• 🔍 Scan for games
+📊 <b>Statistics:</b>
+• Total games in database: {total_games}
+• Your uploaded games: {my_games}
+
+⚡ <b>Features:</b>
+• 📤 Upload Game - Add new game files
+• 🗑️ My Games - Manage your uploads
+• 📊 All Games - View all games
+• 🏷️ Categories - Manage categories
 
 Choose an option:"""
         
         return self.send_message(chat_id, admin_text, keyboard)
     
     def send_upload_menu(self, chat_id):
-        """Send upload menu for admin"""
+        """Send upload menu"""
         keyboard = [
-            ["🆓 Regular Game", "💰 Premium Game"],
-            ["🔙 Admin Menu"]
+            ["🎮 Game File", "📷 Screenshot"],
+            ["📝 Add Description", "🔙 Admin Menu"]
         ]
         
-        upload_text = """📤 <b>Upload Games - Admin Panel</b>
+        upload_text = """📤 <b>Upload Game</b>
 
-Choose the type of game to upload:
+How to upload:
 
-🆓 <b>Regular Game</b>
-• Free for all users
-• No payment required
-• Direct download
+1. Click <b>Game File</b> to upload game file
+   Supported: ZIP, 7Z, ISO, APK, RAR, etc.
+   
+2. (Optional) Click <b>Screenshot</b> to add preview
+   
+3. (Optional) Click <b>Add Description</b> to add description
 
-💰 <b>Premium Game</b>  
-• Requires Stars payment
-• Set your price in Stars
-• Users pay to download
+4. The file will be saved permanently with file_id
+   Users can download it instantly with one click!
 
-📁 Both support all file formats (ZIP, ISO, APK, etc.)"""
+📁 <b>Current upload:</b>"""
+        
+        if chat_id in self.temp_files:
+            file_info = self.temp_files[chat_id]
+            upload_text += f"\n• File: {file_info.get('file_name', 'None')}"
+            upload_text += f"\n• Description: {file_info.get('description', 'None')}"
+            upload_text += f"\n• Screenshots: {len(file_info.get('screenshots', []))}"
+        
+        upload_text += "\n\nStart by uploading a game file:"
         
         return self.send_message(chat_id, upload_text, keyboard)
+    
+    def save_game_to_database(self, chat_id, file_info):
+        """Save uploaded game to database"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Get category from description or use default
+            category = file_info.get('category', 'Other')
+            if not category:
+                category = 'Other'
+            
+            # Insert game into database
+            cursor.execute('''
+                INSERT INTO games 
+                (file_id, file_unique_id, file_name, file_type, file_size, mime_type, 
+                 category, description, added_by, upload_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                file_info['file_id'],
+                file_info.get('file_unique_id', ''),
+                file_info['file_name'],
+                file_info.get('file_type', ''),
+                file_info.get('file_size', 0),
+                file_info.get('mime_type', ''),
+                category,
+                file_info.get('description', ''),
+                chat_id,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            ))
+            
+            self.conn.commit()
+            game_id = cursor.lastrowid
+            
+            # Save screenshots if any
+            screenshots = file_info.get('screenshots', [])
+            for i, screenshot_id in enumerate(screenshots):
+                cursor.execute('''
+                    INSERT INTO game_screenshots 
+                    (game_id, file_id, position)
+                    VALUES (?, ?, ?)
+                ''', (game_id, screenshot_id, i))
+            
+            self.conn.commit()
+            
+            # Clear temp data
+            if chat_id in self.temp_files:
+                del self.temp_files[chat_id]
+            
+            return game_id
+            
+        except Exception as e:
+            print(f"❌ Error saving game to database: {e}")
+            return None
     
     def is_admin(self, user_id):
         return user_id in self.ADMIN_IDS
     
-    def is_user_verified(self, user_id):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            return result and result[0] == 1
-        except:
-            return False
-    
-    def is_user_completed(self, user_id):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            return result and result[0] == 1 and result[1] == 1
-        except:
-            return False
-    
-    def check_channel_membership(self, user_id):
-        try:
-            url = self.base_url + "getChatMember"
-            data = {
-                "chat_id": self.REQUIRED_CHANNEL,
-                "user_id": user_id
-            }
-            response = requests.post(url, data=data, timeout=10)
-            result = response.json()
-            
-            if result.get('ok'):
-                status = result['result']['status']
-                return status in ['member', 'administrator', 'creator']
-            
-        except Exception as e:
-            print(f"❌ Channel check error: {e}")
-        
-        return False
-    
-    def mark_channel_joined(self, user_id):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('UPDATE users SET joined_channel = 1 WHERE user_id = ?', (user_id,))
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error marking channel: {e}")
-            return False
-    
-    def generate_code(self):
-        return ''.join(secrets.choice('0123456789') for _ in range(6))
-    
-    def save_verification_code(self, user_id, username, first_name, code):
-        try:
-            expires = datetime.now() + timedelta(minutes=10)
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO users 
-                (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel)
-                VALUES (?, ?, ?, ?, ?, 0, 0)
-            ''', (user_id, username, first_name, code, expires))
-            self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error saving code: {e}")
-            return False
-    
-    def verify_code(self, user_id, code):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                SELECT verification_code, code_expires FROM users 
-                WHERE user_id = ?
-            ''', (user_id,))
-            result = cursor.fetchone()
-            
-            if not result:
-                return False
-                
-            stored_code, expires_str = result
-            expires = datetime.fromisoformat(expires_str)
-            
-            if datetime.now() > expires:
-                return False
-                
-            if stored_code == code:
-                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = ?', (user_id,))
-                self.conn.commit()
-                return True
-            else:
-                return False
-                
-        except Exception as e:
-            print(f"❌ Verification error: {e}")
-            return False
-    
-    def get_channel_stats(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            regular_games = cursor.fetchone()[0]
-            
-            premium_games = len(self.stars_system.get_premium_games())
-            
-            return {'total_games': regular_games, 'premium_games': premium_games}
-        except:
-            return {'total_games': 0, 'premium_games': 0}
-    
     def format_file_size(self, size_bytes):
+        """Format file size in human readable format"""
         if size_bytes == 0:
             return "0 B"
         
@@ -1022,58 +577,6 @@ Choose the type of game to upload:
         
         return f"{size_bytes:.1f} {size_names[i]}"
     
-    def update_games_cache(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT file_name, file_type, file_size, upload_date, category, is_uploaded FROM channel_games')
-            games = cursor.fetchall()
-            
-            self.games_cache = {
-                'zip': [], '7z': [], 'iso': [], 'apk': [], 'rar': [], 
-                'pkg': [], 'cso': [], 'pbp': [], 'recent': [], 'all': []
-            }
-            
-            for game in games:
-                file_name, file_type, file_size, upload_date, category, is_uploaded = game
-                game_info = {
-                    'file_name': file_name,
-                    'file_type': file_type,
-                    'file_size': file_size,
-                    'upload_date': upload_date,
-                    'category': category,
-                    'is_uploaded': is_uploaded
-                }
-                
-                file_type_lower = file_type.lower()
-                if file_type_lower in self.games_cache:
-                    self.games_cache[file_type_lower].append(game_info)
-                
-                self.games_cache['all'].append(game_info)
-            
-            print(f"🔄 Cache updated: {len(self.games_cache['all'])} games")
-            
-        except Exception as e:
-            print(f"Cache error: {e}")
-    
-    def get_user_info(self, user_id):
-        """Get user info from database"""
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id, username, first_name FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'user_id': result[0],
-                    'username': result[1],
-                    'first_name': result[2]
-                }
-            else:
-                return {'first_name': 'User'}
-        except Exception as e:
-            print(f"❌ Error getting user info: {e}")
-            return {'first_name': 'User'}
-    
     def process_message(self, message):
         """Main message processing function"""
         try:
@@ -1083,296 +586,253 @@ Choose the type of game to upload:
                 user_id = message['from']['id']
                 first_name = message['from']['first_name']
                 
-                print(f"💬 Message from {first_name} ({user_id}): {text}")
+                print(f"💬 Message from {first_name}: {text}")
                 
-                # Handle pre-checkout queries
-                if 'pre_checkout_query' in message:
-                    pre_checkout = message['pre_checkout_query']
-                    success = self.stars_system.handle_pre_checkout(pre_checkout['id'])
-                    return success
+                # Save/update user in database
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO users (user_id, username, first_name)
+                    VALUES (?, ?, ?)
+                ''', (user_id, message['from'].get('username', ''), first_name))
+                self.conn.commit()
                 
-                # Handle successful payments
-                if 'successful_payment' in message:
-                    successful_payment = message['successful_payment']
-                    success = self.stars_system.handle_successful_payment(successful_payment)
-                    if success:
-                        self.send_message(chat_id, "✅ Payment successful! Thank you for your purchase/donation!")
-                    return success
-                
-                # Handle session states first
-                if user_id in self.user_sessions:
-                    session = self.user_sessions[user_id]
+                # Handle session states
+                if chat_id in self.user_sessions:
+                    session = self.user_sessions[chat_id]
                     
-                    # Handle verification code
-                    if session['state'] == 'waiting_code':
-                        if text.isdigit() and len(text) == 6:
-                            if self.verify_code(user_id, text):
-                                if self.check_channel_membership(user_id):
-                                    self.mark_channel_joined(user_id)
-                                    self.send_message(chat_id, "✅ Verification complete! Welcome!")
-                                    self.send_main_menu(chat_id, user_id, first_name)
-                                else:
-                                    self.send_message(chat_id, "✅ Code verified! Please join our channel @pspgamers5")
-                                    keyboard = [["📢 Join Channel"], ["🔙 Main Menu"]]
-                                    self.send_message(chat_id, "Join our channel to continue:", keyboard)
-                                del self.user_sessions[user_id]
+                    # Handle search query
+                    if session.get('state') == 'waiting_query':
+                        return self.handle_search(chat_id, text)
+                    
+                    # Handle description input
+                    elif session.get('state') == 'waiting_description':
+                        if chat_id in self.temp_files:
+                            self.temp_files[chat_id]['description'] = text
+                        
+                        self.user_sessions[chat_id]['state'] = None
+                        self.send_upload_menu(chat_id)
+                        return True
+                    
+                    # Handle category input
+                    elif session.get('state') == 'waiting_category':
+                        if chat_id in self.temp_files:
+                            self.temp_files[chat_id]['category'] = text
+                        
+                        # Complete upload
+                        if chat_id in self.temp_files:
+                            game_id = self.save_game_to_database(chat_id, self.temp_files[chat_id])
+                            if game_id:
+                                self.send_message(chat_id, f"✅ Game saved successfully! ID: {game_id}")
+                                self.send_main_menu(chat_id, user_id, first_name)
                             else:
-                                self.send_message(chat_id, "❌ Invalid or expired code. Try again or use /start")
-                        return True
-                    
-                    # Handle game request
-                    elif session['state'] == 'waiting_game_name':
-                        self.user_sessions[user_id] = {
-                            'menu': 'request',
-                            'state': 'waiting_platform',
-                            'data': {'game_name': text}
-                        }
-                        self.send_message(chat_id, f"🎮 Game: {text}\n\nNow please specify the platform (PSP, Android, etc.):")
-                        return True
-                    
-                    elif session['state'] == 'waiting_platform':
-                        game_name = session['data']['game_name']
-                        platform = text
+                                self.send_message(chat_id, "❌ Failed to save game.")
                         
-                        # Save request to database
-                        cursor = self.conn.cursor()
-                        cursor.execute('''
-                            INSERT INTO game_requests (user_id, user_name, game_name, platform, status)
-                            VALUES (?, ?, ?, ?, 'pending')
-                        ''', (user_id, first_name, game_name, platform, 'pending'))
-                        self.conn.commit()
-                        
-                        self.send_message(chat_id, f"✅ Game request submitted!\n\nGame: {game_name}\nPlatform: {platform}\n\nWe'll notify you when it's available.")
-                        del self.user_sessions[user_id]
-                        return True
-                    
-                    # Handle stars custom amount
-                    elif session['state'] == 'waiting_stars_amount':
-                        try:
-                            stars_amount = int(text)
-                            if stars_amount > 0 and stars_amount <= 10000:
-                                success, invoice_id = self.stars_system.create_stars_invoice(user_id, chat_id, stars_amount, "Bot Stars Donation")
-                                if success:
-                                    self.send_message(chat_id, f"✅ Stars invoice created for {stars_amount} Stars! Check your Telegram messages for payment.")
-                                else:
-                                    self.send_message(chat_id, "❌ Failed to create invoice. Please try again.")
-                            else:
-                                self.send_message(chat_id, "❌ Please enter a valid amount (1-10000 Stars).")
-                        except:
-                            self.send_message(chat_id, "❌ Please enter a valid number.")
-                        del self.user_sessions[user_id]
-                        return True
-                    
-                    # Handle premium game price input
-                    elif session['state'] == 'waiting_premium_price':
-                        try:
-                            stars_price = int(text)
-                            if stars_price > 0 and stars_price <= 10000:
-                                self.user_sessions[user_id]['stars_price'] = stars_price
-                                self.user_sessions[user_id]['state'] = 'waiting_premium_description'
-                                self.send_message(chat_id, f"⭐ Price set: {stars_price} Stars\n\nNow please enter a description for this premium game:")
-                            else:
-                                self.send_message(chat_id, "❌ Please enter a valid price (1-10000 Stars).")
-                        except:
-                            self.send_message(chat_id, "❌ Please enter a valid number.")
-                        return True
-                    
-                    # Handle premium game description
-                    elif session['state'] == 'waiting_premium_description':
-                        description = text
-                        self.user_sessions[user_id]['description'] = description
-                        self.user_sessions[user_id]['state'] = 'waiting_premium_file'
-                        self.send_message(chat_id, f"✅ Description saved!\n\nNow please upload the game file for this premium game.")
+                        del self.user_sessions[chat_id]
                         return True
                 
-                # Handle premium game purchase commands
-                if text.startswith('/premium_'):
-                    try:
-                        game_id = int(text.replace('/premium_', ''))
-                        game = self.stars_system.get_premium_game_by_id(game_id)
-                        
-                        if not game:
-                            self.send_message(chat_id, "❌ Premium game not found.")
-                            return True
-                        
-                        # Check if user already purchased
-                        if self.stars_system.has_user_purchased_game(user_id, game_id):
-                            # Send the file
-                            if game['file_id']:
-                                self.send_document_directly(chat_id, game['file_id'], f"🎮 {game['file_name']}\n\nEnjoy your premium game!")
-                            else:
-                                self.send_message(chat_id, "❌ Game file not available. Please contact admin.")
-                            return True
-                        
-                        # Create invoice for purchase
-                        success, invoice_id = self.stars_system.create_premium_game_invoice(
-                            user_id, chat_id, game['stars_price'], game['file_name'], game_id
-                        )
-                        
-                        if success:
-                            self.send_message(chat_id, f"✅ Invoice created for {game['file_name']}!\n\nPrice: {game['stars_price']} Stars\n\nCheck your Telegram messages for payment.")
-                        else:
-                            self.send_message(chat_id, "❌ Failed to create invoice. Please try again.")
-                        
-                        return True
-                    except:
-                        self.send_message(chat_id, "❌ Invalid premium game ID.")
-                        return True
-                
-                # Handle number guess game
-                if user_id in self.guess_games:
-                    if text.strip().isdigit():
-                        guess = int(text.strip())
-                        return self.handle_guess_input(chat_id, user_id, guess)
-                
-                # Handle commands and menu options
-                if text == '/start':
-                    return self.handle_start(chat_id, user_id, first_name)
-                
-                elif text == '/menu':
-                    if self.is_user_completed(user_id):
-                        self.send_main_menu(chat_id, user_id, first_name)
-                    else:
-                        self.send_verification_menu(chat_id)
-                    return True
-                
-                elif text == '🔙 Back to Main Menu':
+                # Handle menu navigation
+                if text == '/start' or text == '🔙 Main Menu':
                     self.send_main_menu(chat_id, user_id, first_name)
                     return True
                 
-                elif text == '🔙 Back to Games':
-                    self.send_games_menu(chat_id)
+                elif text == '🎮 Browse Games':
+                    self.send_categories_menu(chat_id)
                     return True
                 
-                elif text == '🎮 Games Menu':
-                    self.send_games_menu(chat_id)
+                elif text == '🔙 Categories':
+                    self.send_categories_menu(chat_id)
                     return True
                 
-                elif text == '🔙 Admin Menu':
-                    self.send_admin_menu(chat_id)
+                elif text == '🔍 Search Games':
+                    self.send_search_menu(chat_id)
                     return True
                 
-                elif text == '🎮 Games':
-                    if self.is_user_completed(user_id):
-                        self.send_games_menu(chat_id)
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                elif text == '🔍 Search Again':
+                    self.send_search_menu(chat_id)
                     return True
                 
-                elif text == '📁 Game Files':
-                    if self.is_user_completed(user_id):
-                        self.send_game_files_menu(chat_id)
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                elif text == '📁 My Uploads':
+                    self.send_my_uploads(chat_id, user_id)
                     return True
                 
-                elif text == '💰 Premium Games':
-                    if self.is_user_completed(user_id):
-                        self.send_premium_games_menu(chat_id, user_id)
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                elif text == '📊 Stats':
+                    self.send_stats(chat_id, user_id)
                     return True
                 
-                elif text == '⭐ Stars Menu':
-                    if self.is_user_completed(user_id):
-                        self.send_stars_menu(chat_id, user_id)
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                elif text == '📢 Channel':
+                    self.send_message(chat_id, "📢 Join our channel: @pspgamers5")
+                    return True
+                
+                elif text == 'ℹ️ Help':
+                    self.send_help(chat_id)
                     return True
                 
                 elif text == '👑 Admin Panel':
                     if self.is_admin(user_id):
                         self.send_admin_menu(chat_id)
                     else:
-                        self.send_message(chat_id, "❌ Access denied. Admin only.")
+                        self.send_message(chat_id, "❌ Admin access required.")
                     return True
                 
-                elif text == '📤 Upload Games' and self.is_admin(user_id):
+                elif text == '📤 Upload Game' and self.is_admin(user_id):
                     self.send_upload_menu(chat_id)
                     return True
                 
-                elif text == '🆓 Regular Game' and self.is_admin(user_id):
-                    self.send_message(chat_id, "📤 To upload a regular game, simply send the game file to this bot.\n\nSupported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP")
+                elif text == '🎮 Game File' and self.is_admin(user_id):
+                    self.send_message(chat_id, "📤 Please send the game file now.\n\nSupported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP")
                     return True
                 
-                elif text == '💰 Premium Game' and self.is_admin(user_id):
-                    self.user_sessions[user_id] = {
-                        'menu': 'upload_premium',
-                        'state': 'waiting_premium_price',
-                        'data': {}
-                    }
-                    self.send_message(chat_id, "💰 <b>Premium Game Upload</b>\n\nPlease set the price in Telegram Stars for this game:\n\n💡 Enter a number (e.g., 50 for 50 Stars ≈ $0.50)")
+                elif text == '📝 Add Description' and self.is_admin(user_id):
+                    self.user_sessions[chat_id] = {'state': 'waiting_description'}
+                    self.send_message(chat_id, "📝 Please enter a description for this game:")
                     return True
                 
-                elif text == '💫 Custom Amount':
-                    if self.is_user_completed(user_id):
-                        self.user_sessions[user_id] = {
-                            'menu': 'stars',
-                            'state': 'waiting_stars_amount',
-                            'data': {}
-                        }
-                        self.send_message(chat_id, "💫 Enter the number of Stars you'd like to donate (1-10000):")
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                elif text == '🔙 Admin Menu' and self.is_admin(user_id):
+                    self.send_admin_menu(chat_id)
                     return True
                 
-                elif text.startswith('⭐ '):
-                    if self.is_user_completed(user_id):
-                        stars_text = text.replace('⭐ ', '').replace(' Stars', '')
+                elif text == '📊 All Games' and self.is_admin(user_id):
+                    self.send_all_games(chat_id)
+                    return True
+                
+                elif text == '🏷️ Categories' and self.is_admin(user_id):
+                    self.send_categories_management(chat_id)
+                    return True
+                
+                # Handle category selection
+                elif text.startswith(('🎮 ', '📱 ', '💻 ', '⚙️ ', '🛠️ ', '📦 ')):
+                    category_name = text[2:]  # Remove emoji
+                    self.send_games_in_category(chat_id, category_name)
+                    return True
+                
+                # Handle game selection from category
+                elif chat_id in self.user_sessions and self.user_sessions[chat_id].get('menu') == 'category_games':
+                    if text.startswith('📁 '):
                         try:
-                            stars_amount = int(stars_text)
-                            success, invoice_id = self.stars_system.create_stars_invoice(user_id, chat_id, stars_amount, "Bot Stars Donation")
-                            if success:
-                                self.send_message(chat_id, f"✅ Stars invoice created for {stars_amount} Stars! Check your Telegram messages for payment.")
+                            # Extract game number from button text
+                            game_num = int(text.split('.')[0].replace('📁 ', '')) - 1
+                            session = self.user_sessions[chat_id]
+                            games = session.get('games', [])
+                            
+                            if 0 <= game_num < len(games):
+                                game_id, file_name, description, download_count = games[game_num]
+                                
+                                # Get file_id from database
+                                cursor = self.conn.cursor()
+                                cursor.execute('SELECT file_id FROM games WHERE id = ?', (game_id,))
+                                result = cursor.fetchone()
+                                
+                                if result:
+                                    file_id = result[0]
+                                    caption = f"🎮 <b>{file_name}</b>"
+                                    if description:
+                                        caption += f"\n\n📝 {description}"
+                                    caption += f"\n\n📥 Sent via Game Storage Bot"
+                                    
+                                    # Send the file
+                                    if self.send_document(chat_id, file_id, caption):
+                                        # Show success message with options
+                                        keyboard = [
+                                            ["📁 Send Again", "🎮 Browse More"],
+                                            ["🔙 Categories", "🔍 Search"]
+                                        ]
+                                        self.send_message(chat_id, f"✅ <b>{file_name}</b> sent successfully!", keyboard)
+                                    else:
+                                        self.send_message(chat_id, "❌ Failed to send file.")
+                                else:
+                                    self.send_message(chat_id, "❌ File not found.")
                             else:
-                                self.send_message(chat_id, "❌ Failed to create invoice. Please try again.")
+                                self.send_message(chat_id, "❌ Invalid game selection.")
                         except:
-                            self.send_message(chat_id, "❌ Invalid stars amount.")
-                    else:
-                        self.send_message(chat_id, "❌ Please complete verification first with /start")
+                            self.send_message(chat_id, "❌ Error processing game selection.")
+                        return True
+                
+                # Handle game selection from search results
+                elif chat_id in self.user_sessions and self.user_sessions[chat_id].get('menu') == 'search_results':
+                    if text.startswith('🎮 Game '):
+                        try:
+                            # Extract game number from button text
+                            game_num = int(text.replace('🎮 Game ', '')) - 1
+                            session = self.user_sessions[chat_id]
+                            results = session.get('results', [])
+                            
+                            if 0 <= game_num < len(results):
+                                game_id, file_name, category, description, download_count = results[game_num]
+                                
+                                # Get file_id from database
+                                cursor = self.conn.cursor()
+                                cursor.execute('SELECT file_id FROM games WHERE id = ?', (game_id,))
+                                result = cursor.fetchone()
+                                
+                                if result:
+                                    file_id = result[0]
+                                    caption = f"🎮 <b>{file_name}</b>\n📁 {category}"
+                                    if description:
+                                        caption += f"\n\n📝 {description}"
+                                    caption += f"\n\n📥 Sent via Game Storage Bot"
+                                    
+                                    # Send the file
+                                    if self.send_document(chat_id, file_id, caption):
+                                        keyboard = [
+                                            ["📁 Send Again", "🔍 Search Again"],
+                                            ["🎮 Browse Games", "🔙 Main Menu"]
+                                        ]
+                                        self.send_message(chat_id, f"✅ <b>{file_name}</b> sent successfully!", keyboard)
+                                    else:
+                                        self.send_message(chat_id, "❌ Failed to send file.")
+                                else:
+                                    self.send_message(chat_id, "❌ File not found.")
+                            else:
+                                self.send_message(chat_id, "❌ Invalid game selection.")
+                        except:
+                            self.send_message(chat_id, "❌ Error processing game selection.")
+                        return True
+                
+                # Handle pagination
+                elif text in ['⬅️ Previous', 'Next ➡️']:
+                    if chat_id in self.user_sessions and self.user_sessions[chat_id].get('menu') == 'category_games':
+                        session = self.user_sessions[chat_id]
+                        page = session.get('page', 0)
+                        category = session.get('category', '')
+                        
+                        if text == '⬅️ Previous' and page > 0:
+                            page -= 1
+                        elif text == 'Next ➡️':
+                            page += 1
+                        
+                        self.send_games_in_category(chat_id, category, page)
+                        return True
+                
+                # Handle "Send Again"
+                elif text == '📁 Send Again':
+                    # This would need to track the last sent file
+                    self.send_message(chat_id, "Please select a game from the categories or search results.")
                     return True
-                
-                elif text == '📊 Stars Stats':
-                    if self.is_admin(user_id):
-                        balance = self.stars_system.get_balance()
-                        recent_transactions = self.stars_system.get_recent_transactions(10)
-                        
-                        stats_text = """📊 <b>Telegram Stars Statistics</b>
-
-💰 <b>Financial Overview:</b>"""
-                        
-                        stats_text += f"\n• Total Stars Earned: <b>{balance['total_stars_earned']} ⭐</b>"
-                        stats_text += f"\n• Total USD Earned: <b>${balance['total_usd_earned']:.2f}</b>"
-                        stats_text += f"\n• Available Stars: <b>{balance['available_stars']} ⭐</b>"
-                        stats_text += f"\n• Available USD: <b>${balance['available_usd']:.2f}</b>"
-                        
-                        if recent_transactions:
-                            stats_text += "\n\n🎉 <b>Recent Transactions (Top 10):</b>"
-                            for i, transaction in enumerate(recent_transactions, 1):
-                                donor_name, stars_amount, usd_amount, status, created_at = transaction
-                                date_str = datetime.fromisoformat(created_at).strftime('%m/%d %H:%M')
-                                status_icon = "✅" if status == 'completed' else "⏳"
-                                stats_text += f"\n{i}. {donor_name}: {status_icon} <b>{stars_amount} ⭐ (${usd_amount:.2f})</b> - {date_str}"
-                        
-                        self.send_message(chat_id, stats_text)
-                    else:
-                        self.send_message(chat_id, "❌ Access denied. Admin only.")
-                    return True
-                
-                # Handle other menu options...
-                # [Previous menu handling code continues here]
-                
-                # Handle document uploads from admins
-                if 'document' in message and self.is_admin(user_id):
-                    return self.handle_document_upload(message, user_id, chat_id, first_name)
             
-            # Handle document uploads (outside text handler)
+            # Handle document uploads
             if 'document' in message:
-                user_id = message['from']['id']
                 chat_id = message['chat']['id']
+                user_id = message['from']['id']
                 
                 if self.is_admin(user_id):
-                    return self.handle_document_upload(message, user_id, chat_id, message['from']['first_name'])
+                    return self.handle_document_upload(message, chat_id)
+            
+            # Handle photo uploads (for screenshots)
+            if 'photo' in message:
+                chat_id = message['chat']['id']
+                user_id = message['from']['id']
+                
+                if self.is_admin(user_id) and chat_id in self.temp_files:
+                    photo = message['photo'][-1]  # Get highest resolution
+                    file_id = photo['file_id']
+                    
+                    if 'screenshots' not in self.temp_files[chat_id]:
+                        self.temp_files[chat_id]['screenshots'] = []
+                    
+                    self.temp_files[chat_id]['screenshots'].append(file_id)
+                    self.send_message(chat_id, f"✅ Screenshot added! Total: {len(self.temp_files[chat_id]['screenshots'])}")
+                    self.send_upload_menu(chat_id)
+                    return True
             
             return False
             
@@ -1381,208 +841,263 @@ Choose the type of game to upload:
             traceback.print_exc()
             return False
     
-    def handle_document_upload(self, message, user_id, chat_id, first_name):
+    def handle_document_upload(self, message, chat_id):
         """Handle document upload from admin"""
         try:
-            if 'document' not in message:
-                return False
-            
             doc = message['document']
+            file_id = doc.get('file_id')
+            file_unique_id = doc.get('file_unique_id')
             file_name = doc.get('file_name', 'Unknown File')
             file_size = doc.get('file_size', 0)
-            file_id = doc.get('file_id', '')
-            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
+            mime_type = doc.get('mime_type', '')
             
-            print(f"📥 Admin {user_id} uploading: {file_name}")
+            print(f"📥 Upload received: {file_name} (ID: {file_id})")
             
-            # Check if it's a supported game file
-            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
-            if not any(file_name.lower().endswith(ext) for ext in game_extensions):
-                self.send_message(chat_id, f"❌ File type not supported: {file_name}")
-                return False
-            
-            # Check if this is a premium game upload
-            if user_id in self.user_sessions and self.user_sessions[user_id]['state'] == 'waiting_premium_file':
-                session = self.user_sessions[user_id]
-                stars_price = session.get('stars_price', 0)
-                description = session.get('description', '')
-                
-                # Add premium game to database
-                game_id = self.stars_system.add_premium_game(
-                    file_name, file_type, file_size, stars_price, description, file_id, user_id
-                )
-                
-                if game_id:
-                    # Clean up session
-                    del self.user_sessions[user_id]
-                    
-                    # Send confirmation
-                    size = self.format_file_size(file_size)
-                    confirm_text = f"""✅ <b>Premium Game Added Successfully!</b>
-
-🎮 Game: {file_name}
-💰 Price: <b>{stars_price} Stars</b>
-📦 Type: {file_type}
-📏 Size: {size}
-📝 Description: {description}
-🆔 Game ID: {game_id}
-
-⭐ The game is now available in the premium games section!
-Users can purchase it with: <code>/premium_{game_id}</code>"""
-                    
-                    self.send_message(chat_id, confirm_text)
-                    return True
-                else:
-                    self.send_message(chat_id, "❌ Failed to add premium game to database.")
-                    return False
-            
+            # Determine file type
+            if '.' in file_name:
+                file_type = file_name.split('.')[-1].upper()
             else:
-                # Regular game upload
-                upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                # Prepare game info
-                game_info = {
-                    'message_id': int(time.time() * 1000) + random.randint(1000, 9999),
-                    'file_name': file_name,
-                    'file_type': file_type,
-                    'file_size': file_size,
-                    'upload_date': upload_date,
-                    'category': self.determine_file_category(file_name),
-                    'added_by': user_id,
-                    'is_uploaded': 1,
-                    'is_forwarded': 'forward_origin' in message,
-                    'file_id': file_id,
-                    'bot_message_id': message['message_id']
-                }
-                
-                # Store in database
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO channel_games 
-                    (message_id, file_name, file_type, file_size, upload_date, category, 
-                     added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    game_info['message_id'],
-                    game_info['file_name'],
-                    game_info['file_type'],
-                    game_info['file_size'],
-                    game_info['upload_date'],
-                    game_info['category'],
-                    game_info['added_by'],
-                    game_info['is_uploaded'],
-                    game_info['is_forwarded'],
-                    game_info['file_id'],
-                    game_info['bot_message_id']
-                ))
-                self.conn.commit()
-                
-                # Update cache
-                self.update_games_cache()
-                
-                # Send confirmation
-                size = self.format_file_size(file_size)
-                confirm_text = f"""✅ <b>Regular Game Added Successfully!</b>
+                file_type = 'UNKNOWN'
+            
+            # Store in temp files
+            self.temp_files[chat_id] = {
+                'file_id': file_id,
+                'file_unique_id': file_unique_id,
+                'file_name': file_name,
+                'file_type': file_type,
+                'file_size': file_size,
+                'mime_type': mime_type,
+                'screenshots': []
+            }
+            
+            # Ask for category
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT name, emoji FROM categories ORDER BY name')
+            categories = cursor.fetchall()
+            
+            keyboard = []
+            row = []
+            for name, emoji in categories:
+                row.append(f"{emoji} {name}")
+                if len(row) == 2:
+                    keyboard.append(row.copy())
+                    row = []
+            
+            if row:
+                keyboard.append(row)
+            
+            keyboard.append(["📝 Custom Category"])
+            
+            categories_text = """✅ <b>File received!</b>
 
-📁 File: {file_name}
-📦 Type: {file_type}
-📏 Size: {size}
-🗂️ Category: {game_info['category']}
-🕒 Added: {upload_date}
+📁 File: <code>{}</code>
+📦 Type: {}
+📏 Size: {}
 
-The file is now available in the games browser!"""
-                
-                self.send_message(chat_id, confirm_text)
-                return True
+Now select a category for this game:""".format(
+                file_name, file_type, self.format_file_size(file_size)
+            )
+            
+            self.user_sessions[chat_id] = {'state': 'waiting_category'}
+            return self.send_message(chat_id, categories_text, keyboard)
             
         except Exception as e:
-            print(f"❌ Upload error: {e}")
+            print(f"❌ Document upload error: {e}")
             traceback.print_exc()
             return False
     
-    def determine_file_category(self, filename):
-        filename_lower = filename.lower()
+    def send_my_uploads(self, chat_id, user_id):
+        """Show user's uploaded games"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT id, file_name, category, download_count, upload_date 
+            FROM games 
+            WHERE added_by = ? 
+            ORDER BY upload_date DESC 
+            LIMIT 20
+        ''', (user_id,))
         
-        if filename_lower.endswith('.apk'):
-            return 'Android Games'
-        elif filename_lower.endswith('.iso'):
-            if 'psp' in filename_lower:
-                return 'PSP Games'
-            elif 'ps2' in filename_lower:
-                return 'PS2 Games'
-            elif 'ps1' in filename_lower or 'psx' in filename_lower:
-                return 'PS1 Games'
-            else:
-                return 'ISO Games'
-        elif filename_lower.endswith('.zip'):
-            if 'psp' in filename_lower:
-                return 'PSP Games'
-            else:
-                return 'ZIP Games'
-        elif filename_lower.endswith('.7z'):
-            return '7Z Games'
-        elif filename_lower.endswith('.pkg'):
-            return 'PS Vita Games'
-        elif filename_lower.endswith('.cso') or filename_lower.endswith('.pbp'):
-            return 'PSP Games'
-        else:
-            return 'Other Games'
+        games = cursor.fetchall()
+        
+        if not games:
+            keyboard = [["🔙 Main Menu"]]
+            self.send_message(chat_id, "📭 You haven't uploaded any games yet.", keyboard)
+            return
+        
+        games_text = """📁 <b>My Uploaded Games</b>
+
+"""
+        for i, (game_id, file_name, category, download_count, upload_date) in enumerate(games, 1):
+            games_text += f"{i}. <b>{file_name}</b>\n"
+            games_text += f"   📁 {category} | 📥 {download_count} downloads\n"
+            games_text += f"   📅 {upload_date[:10]}\n\n"
+        
+        keyboard = [["🔙 Main Menu"]]
+        self.send_message(chat_id, games_text, keyboard)
     
-    def handle_start(self, chat_id, user_id, first_name):
-        """Handle /start command"""
-        try:
-            username = message['from'].get('username', '') if 'message' in locals() else ""
-            
-            # Check if user is already completed
-            if self.is_user_completed(user_id):
-                self.send_main_menu(chat_id, user_id, first_name)
-                return True
-            
-            # Check if user is verified but not joined channel
-            if self.is_user_verified(user_id) and not self.check_channel_membership(user_id):
-                keyboard = [["📢 Join Channel"], ["✅ Verify Code"]]
-                self.send_message(chat_id, "✅ Code verified! Please join our channel @pspgamers5", keyboard)
-                return True
-            
-            # Generate verification code
-            code = self.generate_code()
-            if self.save_verification_code(user_id, username, first_name, code):
-                self.user_sessions[user_id] = {
-                    'menu': 'verify',
-                    'state': 'waiting_code',
-                    'data': {}
-                }
-                
-                welcome_text = f"""🔐 <b>Welcome to PSP Gamers Bot!</b>
+    def send_stats(self, chat_id, user_id):
+        """Show bot statistics"""
+        cursor = self.conn.cursor()
+        
+        # Total games
+        cursor.execute('SELECT COUNT(*) FROM games WHERE is_active = 1')
+        total_games = cursor.fetchone()[0]
+        
+        # Total downloads
+        cursor.execute('SELECT SUM(download_count) FROM games')
+        total_downloads = cursor.fetchone()[0] or 0
+        
+        # Your downloads
+        cursor.execute('SELECT COUNT(*) FROM games WHERE added_by = ?', (user_id,))
+        your_games = cursor.fetchone()[0]
+        
+        # Most popular category
+        cursor.execute('''
+            SELECT category, COUNT(*) as count 
+            FROM games 
+            WHERE is_active = 1 
+            GROUP BY category 
+            ORDER BY count DESC 
+            LIMIT 1
+        ''')
+        popular_category = cursor.fetchone()
+        
+        stats_text = f"""📊 <b>Bot Statistics</b>
 
-👋 Hello {first_name}!
+🎮 Total Games: {total_games}
+📥 Total Downloads: {total_downloads}
+👤 Your Uploads: {your_games}"""
 
-Your verification code: 
-<code>{code}</code>
-
-📝 Reply with this code to verify.
-
-⏰ Code expires in 10 minutes.
-
-After verification, join our channel: @pspgamers5"""
-                
-                self.send_message(chat_id, welcome_text)
-                return True
-            else:
-                self.send_message(chat_id, "❌ Error generating verification code. Please try again.")
-                return False
-            
-        except Exception as e:
-            print(f"❌ Start handler error: {e}")
-            self.send_message(chat_id, "❌ Error starting bot. Please try again.")
-            return False
+        if popular_category:
+            cat_name, cat_count = popular_category
+            stats_text += f"\n🏆 Popular Category: {cat_name} ({cat_count} games)"
+        
+        stats_text += "\n\n📈 <b>Top Categories:</b>\n"
+        
+        cursor.execute('''
+            SELECT category, COUNT(*) as count 
+            FROM games 
+            WHERE is_active = 1 
+            GROUP BY category 
+            ORDER BY count DESC 
+            LIMIT 5
+        ''')
+        
+        for category, count in cursor.fetchall():
+            stats_text += f"• {category}: {count} games\n"
+        
+        keyboard = [["🔙 Main Menu"]]
+        self.send_message(chat_id, stats_text, keyboard)
     
-    # [Previous methods for mini-games, search, etc. continue here]
-    # Note: I've omitted some repetitive methods for brevity
+    def send_help(self, chat_id):
+        """Show help information"""
+        help_text = """ℹ️ <b>Help & Information</b>
+
+🤖 <b>How to use this bot:</b>
+
+1. <b>Browse Games</b>
+   • Select a category
+   • Click on any game to download it instantly
+   
+2. <b>Search Games</b>
+   • Type the game name
+   • Click on results to download
+   
+3. <b>Upload Games (Admins)</b>
+   • Go to Admin Panel
+   • Upload game files
+   • Files are saved permanently
+   
+4. <b>Fast Downloads</b>
+   • Uses Telegram's file_id system
+   • Instant file sending
+   • No re-uploads needed
+
+📱 <b>Features:</b>
+• One-click file downloads
+• Permanent file storage
+• Search functionality
+• Download statistics
+• Category organization
+
+📢 <b>Channel:</b> @pspgamers5
+
+For admin access, contact bot owner."""
+        
+        keyboard = [["🔙 Main Menu"]]
+        self.send_message(chat_id, help_text, keyboard)
+    
+    def send_all_games(self, chat_id):
+        """Show all games for admin"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM games WHERE is_active = 1')
+        total_games = cursor.fetchone()[0]
+        
+        cursor.execute('SELECT SUM(download_count) FROM games')
+        total_downloads = cursor.fetchone()[0] or 0
+        
+        cursor.execute('''
+            SELECT category, COUNT(*) as count 
+            FROM games 
+            WHERE is_active = 1 
+            GROUP BY category 
+            ORDER BY count DESC
+        ''')
+        
+        stats_text = f"""📊 <b>All Games - Admin View</b>
+
+🎮 Total Games: {total_games}
+📥 Total Downloads: {total_downloads}
+
+📈 <b>Games by Category:</b>\n"""
+        
+        for category, count in cursor.fetchall():
+            stats_text += f"• {category}: {count} games\n"
+        
+        # Recent uploads
+        cursor.execute('''
+            SELECT file_name, added_by, upload_date, download_count 
+            FROM games 
+            WHERE is_active = 1 
+            ORDER BY upload_date DESC 
+            LIMIT 5
+        ''')
+        
+        stats_text += "\n📅 <b>Recent Uploads:</b>\n"
+        for file_name, added_by, upload_date, download_count in cursor.fetchall():
+            stats_text += f"• {file_name} ({download_count} downloads)\n"
+        
+        keyboard = [
+            ["📤 Upload Game", "🗑️ Manage Games"],
+            ["🔙 Admin Menu"]
+        ]
+        
+        self.send_message(chat_id, stats_text, keyboard)
+    
+    def send_categories_management(self, chat_id):
+        """Manage categories"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT name, emoji FROM categories ORDER BY name')
+        categories = cursor.fetchall()
+        
+        categories_text = """🏷️ <b>Categories Management</b>
+
+Current categories:
+"""
+        for name, emoji in categories:
+            cursor.execute('SELECT COUNT(*) FROM games WHERE category = ? AND is_active = 1', (name,))
+            count = cursor.fetchone()[0]
+            categories_text += f"{emoji} {name} - {count} games\n"
+        
+        categories_text += "\nTo add a category, type: /addcategory Name Emoji"
+        categories_text += "\nExample: /addcategory Nintendo 🎮"
+        
+        keyboard = [["🔙 Admin Menu"]]
+        self.send_message(chat_id, categories_text, keyboard)
     
     def run(self):
         """Main bot loop"""
-        print("🤖 Bot is running with Telegram Stars...")
+        print("🤖 Game Storage Bot is running...")
         
         offset = 0
         
@@ -1603,12 +1118,6 @@ After verification, join our channel: @pspgamers5"""
                         try:
                             if 'message' in update:
                                 self.process_message(update['message'])
-                            elif 'pre_checkout_query' in update:
-                                # Handle pre-checkout queries
-                                pre_checkout = update['pre_checkout_query']
-                                success = self.stars_system.handle_pre_checkout(pre_checkout['id'])
-                                if success:
-                                    print(f"✅ Pre-checkout query handled: {pre_checkout['id']}")
                         except Exception as e:
                             print(f"❌ Update processing error: {e}")
                             continue
@@ -1626,12 +1135,11 @@ After verification, join our channel: @pspgamers5"""
 # ==================== START THE BOT ====================
 
 if __name__ == "__main__":
-    print("🚀 Starting Telegram Bot with Stars Payments...")
+    print("🚀 Starting Game Storage Bot...")
     
     # Start health check server
     start_health_check()
     
-    # Wait for health server to start
     time.sleep(2)
     
     if BOT_TOKEN:
@@ -1648,7 +1156,7 @@ if __name__ == "__main__":
                 print(f"✅ Bot connected: {bot_name}")
                 
                 # Start the bot
-                bot = CrossPlatformBot(BOT_TOKEN)
+                bot = TelegramGameBot(BOT_TOKEN)
                 bot.run()
             else:
                 print(f"❌ Invalid bot token: {data.get('description')}")
@@ -1657,8 +1165,7 @@ if __name__ == "__main__":
             print(f"❌ Connection error: {e}")
     else:
         print("❌ ERROR: BOT_TOKEN environment variable not set!")
-        print("💡 Health server will continue running for monitoring")
         
-        # Keep the health server running
+        # Keep running for health checks
         while True:
             time.sleep(60)
