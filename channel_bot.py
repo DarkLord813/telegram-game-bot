@@ -1861,7 +1861,8 @@ class CrossPlatformBot:
                 if not self.is_user_completed(user_id):
                     self.robust_send_message(chat_id, "🔐 Please complete verification first with /start")
                     return True
-                self.show_games_menu(user_id, chat_id)
+                # FIXED: Show game files menu instead of just games menu
+                self.show_game_files_menu(user_id, chat_id)
                 return True
                 
             elif command == "🔍 Search Games":
@@ -4044,76 +4045,88 @@ Always available!
         backup_thread = threading.Thread(target=async_backup, daemon=True)
         backup_thread.start()
     
-    # ==================== FILE SENDING METHODS ====================
+    # ==================== FILE SENDING METHODS (FIXED) ====================
     
     def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
-        """Universal file sending that works for all users"""
+        """Universal file sending that works for all users - FIXED VERSION"""
         try:
-            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, is_bot_file={is_bot_file}")
+            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, file_id={file_id[:20] if file_id else 'None'}, is_bot_file={is_bot_file}")
             
-            # PRIORITY 1: Direct file_id send (should work for bot-uploaded files)
-            if file_id and file_id not in ['short', 'none']:
+            # If we have a file_id, try to send it directly first
+            if file_id and file_id not in ['short', 'none', '']:
                 print(f"🔄 Attempting direct file_id send: {file_id[:20]}...")
                 if self.send_document_directly(chat_id, file_id):
                     print("✅ Successfully sent via direct file_id")
                     return True
             
-            # PRIORITY 2: Try to get file from any admin's chat (for bot-uploaded files)
+            # If it's a bot-uploaded file, we need to handle it differently
             if is_bot_file:
-                print("🔄 Looking for file in admin chats...")
-                for admin_id in self.ADMIN_IDS:
-                    file_id = self.get_file_id_from_admin_chat(message_id, admin_id)
-                    if file_id and self.send_document_directly(chat_id, file_id):
-                        print(f"✅ Found and sent file from admin {admin_id}")
-                        return True
+                print("🔄 Handling bot-uploaded file...")
+                
+                # Get game info from database
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    SELECT message_id, file_name, file_type, file_size, added_by, file_id, bot_message_id, is_uploaded 
+                    FROM channel_games 
+                    WHERE bot_message_id = ? OR message_id = ?
+                    LIMIT 1
+                ''', (message_id, message_id))
+                
+                game_info = cursor.fetchone()
+                
+                if game_info:
+                    db_message_id, file_name, file_type, file_size, added_by, db_file_id, bot_msg_id, is_uploaded = game_info
+                    print(f"📁 Found game in DB: {file_name}, added_by: {added_by}, bot_msg_id: {bot_msg_id}")
+                    
+                    # If we have a file_id in DB, try it
+                    if db_file_id and db_file_id not in ['short', 'none', '']:
+                        print(f"🔄 Trying DB file_id: {db_file_id[:20]}...")
+                        if self.send_document_directly(chat_id, db_file_id):
+                            print("✅ Successfully sent via DB file_id")
+                            return True
+                    
+                    # Try to get fresh file_id from admin's chat
+                    if bot_msg_id and added_by in self.ADMIN_IDS:
+                        print(f"🔄 Getting fresh file_id from admin {added_by}...")
+                        fresh_file_id = self.get_file_id_from_message(added_by, bot_msg_id)
+                        if fresh_file_id:
+                            print(f"🔄 Got fresh file_id: {fresh_file_id[:20]}...")
+                            if self.send_document_directly(chat_id, fresh_file_id):
+                                # Update DB with new file_id
+                                cursor.execute('UPDATE channel_games SET file_id = ? WHERE bot_message_id = ?', (fresh_file_id, bot_msg_id))
+                                self.conn.commit()
+                                print("✅ Successfully sent via fresh file_id and updated DB")
+                                return True
+                    
+                    # Last resort: try to forward the original message
+                    if bot_msg_id and added_by in self.ADMIN_IDS:
+                        print(f"🔄 Forwarding original message from admin {added_by}...")
+                        if self.forward_message(chat_id, added_by, bot_msg_id):
+                            print("✅ Successfully forwarded message")
+                            return True
             
-            # PRIORITY 3: For bot-uploaded files, try to get the file from the bot's own messages
-            if is_bot_file:
-                print("🔄 Getting file from bot's message history...")
-                fresh_file_id = self.get_file_id_from_bot_message(message_id)
-                if fresh_file_id and self.send_document_directly(chat_id, fresh_file_id):
-                    print("✅ Successfully sent via fresh file_id from bot")
+            # If it's a channel file, try to forward it
+            if not is_bot_file:
+                print("🔄 Forwarding channel file...")
+                if self.forward_message(chat_id, self.REQUIRED_CHANNEL, message_id):
+                    print("✅ Successfully forwarded channel file")
                     return True
             
-            # PRIORITY 4: Last resort - direct upload fallback
-            if is_bot_file:
-                print("🔄 Falling back to database file retrieval...")
-                game_info = self.get_game_info_by_bot_message_id(message_id)
-                if game_info and 'file_name' in game_info:
-                    # Try to get the file from the original uploader
-                    file_id = self.get_file_from_original_uploader(game_info)
-                    if file_id and self.send_document_directly(chat_id, file_id):
-                        print("✅ Sent via original uploader retrieval")
-                        return True
-            
-            # FINAL FALLBACK: Notify admin about the issue
-            print(f"❌ All send methods failed for message {message_id}")
-            
-            # Send error to user
-            self.robust_send_message(
-                chat_id, 
+            # If all methods fail, send error message
+            print("❌ All file sending methods failed")
+            self.robust_send_message(chat_id, 
                 "❌ Unable to send file. The file may have been removed or is inaccessible. "
-                "Please contact an admin for assistance."
+                "Please contact an admin for assistance.",
+                self.create_main_menu_buttons()
             )
-            
-            # Notify admins about the failed delivery
-            for admin_id in self.ADMIN_IDS:
-                self.robust_send_message(
-                    admin_id,
-                    f"⚠️ File delivery failed\n"
-                    f"User: {chat_id}\n"
-                    f"Message ID: {message_id}\n"
-                    f"Type: {'Bot file' if is_bot_file else 'Channel file'}\n"
-                    f"File may need to be re-uploaded."
-                )
-            
             return False
             
         except Exception as e:
             print(f"❌ Error sending game file: {e}")
-            self.robust_send_message(
-                chat_id, 
-                "❌ Error sending file. Please try again or contact admin."
+            traceback.print_exc()
+            self.robust_send_message(chat_id, 
+                "❌ Error sending file. Please try again or contact admin.",
+                self.create_main_menu_buttons()
             )
             return False
     
@@ -4158,6 +4171,62 @@ Always available!
             print(f"❌ Error sending document directly: {e}")
             return False
     
+    def get_file_id_from_message(self, chat_id, message_id):
+        """Get file_id from a specific message"""
+        try:
+            url = self.base_url + "getMessage"
+            data = {
+                "chat_id": chat_id,
+                "message_id": message_id
+            }
+            
+            response = requests.post(url, data=data, timeout=10)
+            result = response.json()
+            
+            if result.get('ok'):
+                message = result['result']
+                if 'document' in message:
+                    file_id = message['document'].get('file_id')
+                    print(f"✅ Got file_id from message {message_id}: {file_id[:20]}...")
+                    return file_id
+                elif 'photo' in message:
+                    # Get the highest quality photo
+                    file_id = message['photo'][-1].get('file_id')
+                    print(f"✅ Got photo file_id from message {message_id}: {file_id[:20]}...")
+                    return file_id
+            
+            print(f"❌ No document or photo in message {message_id}")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Error getting file_id from message: {e}")
+            return None
+    
+    def forward_message(self, from_chat_id, to_chat_id, message_id):
+        """Forward a message from one chat to another"""
+        try:
+            url = self.base_url + "forwardMessage"
+            data = {
+                "chat_id": to_chat_id,
+                "from_chat_id": from_chat_id,
+                "message_id": message_id
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                print(f"✅ Forwarded message {message_id} from {from_chat_id} to {to_chat_id}")
+                return True
+            else:
+                error_msg = result.get('description', 'Unknown error')
+                print(f"❌ Forward failed: {error_msg}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Error forwarding message: {e}")
+            return False
+    
     def send_premium_game_file(self, user_id, chat_id, game_id):
         """Send premium game file to user"""
         game = self.premium_games_system.get_premium_game_by_id(game_id)
@@ -4189,6 +4258,7 @@ Always available!
     # ==================== UPLOAD SYSTEM ENHANCEMENTS ====================
     
     def handle_document_upload(self, message):
+        """Handle document uploads from admins - FIXED VERSION"""
         try:
             user_id = message['from']['id']
             chat_id = message['chat']['id']
@@ -4219,7 +4289,7 @@ Always available!
             bot_message_id = message['message_id']
             
             print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
-            print(f"📁 File ID: {file_id}")
+            print(f"📁 File ID: {file_id[:30]}...")
             
             # Check for duplicates
             regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
@@ -4255,7 +4325,7 @@ This game already exists in the database:"""
                 return True
             
             # Check if it's a supported game file
-            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk', '.txt', '.pdf']
             if not any(file_name.lower().endswith(ext) for ext in game_extensions):
                 self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
                 print(f"❌ Unsupported file type: {file_name}")
@@ -4369,6 +4439,7 @@ The file is now available in the games browser and search!"""
             print(f"❌ Upload error: {e}")
             import traceback
             traceback.print_exc()
+            self.robust_send_message(chat_id, f"❌ Error uploading file: {str(e)[:100]}")
             return False
     
     def start_premium_upload(self, user_id, chat_id):
@@ -4990,7 +5061,7 @@ After joining, click the button below:""",
                         doc = message['document']
                         file_name = doc.get('file_name', '').lower()
                         
-                        game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+                        game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk', '.txt', '.pdf']
                         if any(file_name.endswith(ext) for ext in game_extensions):
                             
                             # Check if this game is already in database
@@ -5239,6 +5310,10 @@ After joining, click the button below:""",
             return 'PS Vita Games'
         elif filename_lower.endswith('.cso') or filename_lower.endswith('.pbp'):
             return 'PSP Games'
+        elif filename_lower.endswith('.txt'):
+            return 'Text Files'
+        elif filename_lower.endswith('.pdf'):
+            return 'PDF Files'
         else:
             return 'Other Games'
     
@@ -5522,7 +5597,7 @@ After joining, click the button below:""",
                 doc = message['document']
                 file_name = doc.get('file_name', '').lower()
                 
-                game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+                game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk', '.txt', '.pdf']
                 if any(file_name.endswith(ext) for ext in game_extensions):
                     file_type = file_name.split('.')[-1].upper()
                     upload_date = datetime.fromtimestamp(message['date']).strftime('%Y-%m-%d %H:%M:%S')
@@ -6485,118 +6560,6 @@ Sending messages..."""
         else:
             self.robust_send_message(chat_id, "❌ Failed to send photo reply.")
             return False
-    
-    def get_file_id_from_admin_chat(self, message_id, admin_id):
-        """Get file_id from a specific admin's chat"""
-        try:
-            # First try to get the message
-            url = self.base_url + "getMessage"
-            data = {
-                "chat_id": admin_id,
-                "message_id": message_id
-            }
-            response = requests.post(url, data=data, timeout=10)
-            result = response.json()
-            
-            if result.get('ok'):
-                message = result['result']
-                if 'document' in message:
-                    file_id = message['document'].get('file_id')
-                    print(f"✅ Found file_id in admin {admin_id}'s chat: {file_id[:20]}...")
-                    return file_id
-                elif 'photo' in message:
-                    # Get the highest quality photo
-                    file_id = message['photo'][-1].get('file_id')
-                    print(f"✅ Found photo file_id in admin {admin_id}'s chat: {file_id[:20]}...")
-                    return file_id
-            
-            # If not found, search through recent messages
-            print(f"🔍 Searching recent messages in admin {admin_id}'s chat...")
-            url = self.base_url + "getUpdates"
-            params = {
-                "timeout": 5,
-                "limit": 20,
-                "offset": -20
-            }
-            response = requests.get(url, params=params, timeout=10)
-            result = response.json()
-            
-            if result.get('ok'):
-                for update in result['result']:
-                    if 'message' in update:
-                        msg = update['message']
-                        if msg.get('message_id') == message_id:
-                            if 'document' in msg:
-                                file_id = msg['document'].get('file_id')
-                                print(f"✅ Found file_id via search in admin {admin_id}'s chat: {file_id[:20]}...")
-                                return file_id
-            
-            return None
-            
-        except Exception as e:
-            print(f"❌ Error getting file from admin chat: {e}")
-            return None
-    
-    def get_game_info_by_bot_message_id(self, bot_message_id):
-        """Get game info from database using bot_message_id"""
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                SELECT file_name, file_type, file_size, added_by, file_id
-                FROM channel_games 
-                WHERE bot_message_id = ?
-            ''', (bot_message_id,))
-            
-            result = cursor.fetchone()
-            if result:
-                return {
-                    'file_name': result[0],
-                    'file_type': result[1],
-                    'file_size': result[2],
-                    'added_by': result[3],
-                    'file_id': result[4]
-                }
-            return None
-        except Exception as e:
-            print(f"❌ Error getting game info: {e}")
-            return None
-    
-    def get_file_from_original_uploader(self, game_info):
-        """Try to get the file from the original uploader"""
-        try:
-            admin_id = game_info.get('added_by')
-            if not admin_id or admin_id == 0:
-                return None
-            
-            print(f"🔍 Asking admin {admin_id} to re-send file: {game_info['file_name']}")
-            
-            # Send a request to the admin to provide the file
-            request_text = f"""🔄 File Access Request
-
-A user is trying to access a file but it's not available:
-
-📁 File: {game_info['file_name']}
-📦 Type: {game_info['file_type']}
-📏 Size: {self.format_file_size(game_info['file_size'])}
-
-Please re-upload this file or provide the file_id:
-<code>/upload {game_info['file_name']}</code>
-
-Or simply forward/send the file to me again."""
-
-            self.robust_send_message(admin_id, request_text)
-            
-            # Return the existing file_id if we have it
-            return game_info.get('file_id')
-            
-        except Exception as e:
-            print(f"❌ Error requesting file from uploader: {e}")
-            return None
-    
-    def handle_forwarded_message(self, message):
-        """Handle forwarded messages from admins"""
-        # For forwarded messages, we treat them as regular uploads
-        return self.handle_document_upload(message)
     
     def get_user_info(self, user_id):
         """Get user info from database"""
