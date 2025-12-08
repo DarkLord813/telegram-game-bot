@@ -2811,12 +2811,7 @@ Click on any game below to download it:\n\n"""
                 self.robust_send_message(chat_id, f"📥 Sending game: <b>{game_found['file_name']}</b>...")
                 
                 is_bot_file = is_uploaded == 1 and bot_message_id is not None
-                if is_bot_file:
-                    # Use bot_message_id for bot-uploaded files
-                    success = self.send_game_file(chat_id, bot_message_id, file_id, True)
-                else:
-                    # Use channel message_id for channel files
-                    success = self.send_game_file(chat_id, message_id, file_id, False)
+                success = self.send_game_file(chat_id, bot_message_id if is_bot_file else message_id, file_id, is_bot_file)
                 
                 if not success:
                     self.robust_send_message(chat_id, 
@@ -2904,148 +2899,116 @@ Click on any game below to download it:\n\n"""
             return None
     
     def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
-        """Send game file directly to user (like in the screenshot)"""
+        """Send game file directly to user using Telegram's file_id system"""
         try:
-            print(f"📤 Sending game file to user {chat_id}: msg_id={message_id}, file_id={file_id[:20] if file_id else 'None'}")
+            print(f"📤 Sending game file to user {chat_id}")
             
-            # If we have a valid file_id, send it directly
+            # If we have a valid file_id, use it DIRECTLY (most efficient)
             if file_id and file_id not in ['short', 'none', '']:
-                print(f"🔄 Attempting direct file_id send: {file_id[:20]}...")
+                print(f"🔄 Using direct file_id: {file_id[:20]}...")
                 
-                # Try to send as document
-                url = self.base_url + "sendDocument"
-                data = {
-                    "chat_id": chat_id,
-                    "document": file_id,
-                    "caption": "🎮 Here's your requested game!",
-                    "parse_mode": "HTML"
-                }
+                # First verify the file_id is accessible
+                url = self.base_url + "getFile"
+                data = {"file_id": file_id}
+                verify_response = requests.post(url, data=data, timeout=10)
+                verify_result = verify_response.json()
                 
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print("✅ Successfully sent file directly via file_id")
-                    return True
-                else:
-                    print(f"❌ Direct send failed: {result.get('description')}")
-            
-            # If no file_id or failed, try to get file from message
-            print("🔄 Getting file from message...")
-            
-            # Determine where to get the file from
-            source_chat_id = None
-            if is_bot_file and message_id:
-                # Try to get from admin's chat
-                for admin_id in self.ADMIN_IDS:
-                    file_info = self.get_file_info_from_message(admin_id, message_id)
-                    if file_info:
-                        source_chat_id = admin_id
-                        break
-            else:
-                # Try to get from channel
-                file_info = self.get_file_info_from_message(self.REQUIRED_CHANNEL, message_id)
-                source_chat_id = self.REQUIRED_CHANNEL
-            
-            if file_info and source_chat_id:
-                file_type = file_info.get('type')  # 'document', 'video', 'audio', 'photo'
-                actual_file_id = file_info.get('file_id')
-                file_name = file_info.get('file_name', 'game_file')
-                mime_type = file_info.get('mime_type', '')
-                
-                print(f"📁 Found file: {file_name}, type: {file_type}, id: {actual_file_id[:20] if actual_file_id else 'None'}")
-                
-                if actual_file_id:
-                    # Send based on file type
-                    if file_type == 'document':
-                        # Send document (ZIP, ISO, RAR, etc.)
-                        url = self.base_url + "sendDocument"
-                        data = {
-                            "chat_id": chat_id,
-                            "document": actual_file_id,
-                            "caption": f"🎮 {file_name}\n\nHere's your game file!",
-                            "parse_mode": "HTML"
-                        }
-                        
-                        # For ISO files specifically (like in your screenshot)
-                        if file_name.lower().endswith('.iso'):
-                            data['caption'] = f"""🎮 <b>{file_name}</b>
-
-💿 ISO game file ready for download!
-
-📁 File Size: {self.format_file_size(file_info.get('file_size', 0))}
-🎮 Type: ISO Game File
-
-<i>Download and enjoy your game!</i>"""
-                        
-                    elif file_type == 'video':
-                        url = self.base_url + "sendVideo"
-                        data = {
-                            "chat_id": chat_id,
-                            "video": actual_file_id,
-                            "caption": "🎮 Game Video File",
-                            "parse_mode": "HTML"
-                        }
-                    elif file_type == 'audio':
-                        url = self.base_url + "sendAudio"
-                        data = {
-                            "chat_id": chat_id,
-                            "audio": actual_file_id,
-                            "caption": "🎮 Game Audio File",
-                            "parse_mode": "HTML"
-                        }
-                    elif file_type == 'photo':
-                        url = self.base_url + "sendPhoto"
-                        data = {
-                            "chat_id": chat_id,
-                            "photo": actual_file_id,
-                            "caption": "🎮 Game Image",
-                            "parse_mode": "HTML"
-                        }
-                    else:
-                        # Default to document
-                        url = self.base_url + "sendDocument"
-                        data = {
-                            "chat_id": chat_id,
-                            "document": actual_file_id,
-                            "caption": f"🎮 {file_name}",
-                            "parse_mode": "HTML"
-                        }
+                if verify_result.get('ok'):
+                    print(f"✅ File_id is valid and accessible: {file_id[:20]}...")
+                    
+                    # Now send the document directly
+                    url = self.base_url + "sendDocument"
+                    data = {
+                        "chat_id": chat_id,
+                        "document": file_id,
+                        "caption": "🎮 Here's your requested game!",
+                        "parse_mode": "HTML"
+                    }
                     
                     response = requests.post(url, data=data, timeout=30)
                     result = response.json()
                     
                     if result.get('ok'):
-                        print(f"✅ Successfully sent {file_type} to user {chat_id}")
-                        
-                        # If this worked, update the file_id in database for future use
-                        if file_id != actual_file_id:
-                            cursor = self.conn.cursor()
-                            if is_bot_file:
-                                cursor.execute('''
-                                    UPDATE channel_games 
-                                    SET file_id = ? 
-                                    WHERE bot_message_id = ? OR message_id = ?
-                                ''', (actual_file_id, message_id, message_id))
-                            else:
-                                cursor.execute('''
-                                    UPDATE channel_games 
-                                    SET file_id = ? 
-                                    WHERE message_id = ?
-                                ''', (actual_file_id, message_id))
-                            self.conn.commit()
-                            print(f"💾 Updated file_id in database for {file_name}")
-                        
+                        print("✅ Successfully sent file directly via file_id")
                         return True
                     else:
-                        print(f"❌ Failed to send {file_type}: {result.get('description')}")
+                        print(f"❌ Direct send failed: {result.get('description')}")
+                else:
+                    print(f"❌ File_id is invalid or not accessible: {verify_result.get('description')}")
             
-            # If all else fails, try to forward the message
+            # If no valid file_id, try to get it from the message
+            print("🔄 Getting file_id from message...")
+            
+            # Determine source chat
+            source_chat_id = None
+            if is_bot_file and message_id:
+                # Try to get from admin's chat (bot-uploaded files)
+                for admin_id in self.ADMIN_IDS:
+                    try:
+                        url = self.base_url + "getMessage"
+                        data = {
+                            "chat_id": admin_id,
+                            "message_id": message_id
+                        }
+                        response = requests.post(url, data=data, timeout=10)
+                        result = response.json()
+                        
+                        if result.get('ok'):
+                            message = result['result']
+                            if 'document' in message:
+                                file_id = message['document'].get('file_id')
+                                source_chat_id = admin_id
+                                break
+                    except:
+                        continue
+            else:
+                # Try to get from channel
+                try:
+                    url = self.base_url + "getMessage"
+                    data = {
+                        "chat_id": self.REQUIRED_CHANNEL,
+                        "message_id": message_id
+                    }
+                    response = requests.post(url, data=data, timeout=10)
+                    result = response.json()
+                    
+                    if result.get('ok'):
+                        message = result['result']
+                        if 'document' in message:
+                            file_id = message['document'].get('file_id')
+                            source_chat_id = self.REQUIRED_CHANNEL
+                except:
+                    pass
+            
+            # If we found a file_id, send it directly
+            if file_id and file_id not in ['short', 'none', '']:
+                print(f"✅ Found file_id from message: {file_id[:20]}...")
+                
+                # Store this file_id in database for future use
+                cursor = self.conn.cursor()
+                if is_bot_file:
+                    cursor.execute('''
+                        UPDATE channel_games 
+                        SET file_id = ? 
+                        WHERE bot_message_id = ? OR message_id = ?
+                    ''', (file_id, message_id, message_id))
+                else:
+                    cursor.execute('''
+                        UPDATE channel_games 
+                        SET file_id = ? 
+                        WHERE message_id = ?
+                    ''', (file_id, message_id))
+                self.conn.commit()
+                
+                # Send using the file_id
+                return self.send_document_directly(chat_id, file_id)
+            
+            # If all else fails, forward the message as last resort
             print("🔄 Falling back to message forwarding...")
             if source_chat_id:
                 return self.forward_message(source_chat_id, chat_id, message_id)
             else:
-                # Try forwarding from channel as last resort
+                # Try forwarding from channel
                 return self.forward_message(self.REQUIRED_CHANNEL, chat_id, message_id)
                 
         except Exception as e:
@@ -3053,11 +3016,9 @@ Click on any game below to download it:\n\n"""
             import traceback
             traceback.print_exc()
             
-            # Try to send an error message
             try:
                 self.robust_send_message(chat_id, 
-                    "❌ Unable to send the game file. Please try again or contact an admin.\n\n"
-                    "If the problem persists, the file may be too large or unavailable.",
+                    "❌ Unable to send the game file. Please try again or contact an admin.",
                     self.create_game_files_buttons()
                 )
             except:
@@ -3066,21 +3027,11 @@ Click on any game below to download it:\n\n"""
             return False
     
     def send_document_directly(self, chat_id, file_id, file_name=None):
-        """Send document directly using file_id"""
+        """Send document directly using file_id (FASTEST method)"""
         try:
-            print(f"📤 Sending document directly: {file_id[:30]}...")
+            print(f"📤 Sending document directly with file_id: {file_id[:30]}...")
             
-            # First verify the file_id is valid
-            url = self.base_url + "getFile"
-            data = {"file_id": file_id}
-            verify_response = requests.post(url, data=data, timeout=10)
-            verify_result = verify_response.json()
-            
-            if not verify_result.get('ok'):
-                print(f"❌ File_id is invalid: {verify_result.get('description')}")
-                return False
-            
-            # Now send the document
+            # No need to verify first - Telegram will handle validation
             url = self.base_url + "sendDocument"
             caption = "🎮 Here's your game file!"
             
@@ -3105,12 +3056,18 @@ Click on any game below to download it:\n\n"""
             result = response.json()
             
             if result.get('ok'):
-                print(f"✅ Sent document directly to user {chat_id}")
+                print(f"✅ Document sent directly to user {chat_id}")
                 return True
             else:
                 error_msg = result.get('description', 'Unknown error')
                 print(f"❌ Direct send failed: {error_msg}")
-                return False
+                
+                # If the file_id is invalid, return False so caller can try other methods
+                if "file identifier is invalid" in error_msg.lower():
+                    return False
+                
+                # For other errors, still return True (message sent but might have issues)
+                return True
                 
         except requests.exceptions.Timeout:
             print("⏰ Timeout sending document")
@@ -4502,12 +4459,18 @@ This game already exists in the database:"""
                 # For bot-uploaded files, create a unique ID
                 storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
             
-            # CRITICAL: Test if file_id is accessible by other users
-            file_id_accessible = self.test_file_id_accessibility(file_id)
-            
-            if not file_id_accessible:
-                print("⚠️ File ID not universally accessible, will use message forwarding")
-                # We'll rely on message forwarding instead of file_id
+            # Test if file_id is accessible by other users
+            file_id_valid = False
+            if file_id and file_id not in ['', 'short']:
+                # Test by trying to get file info
+                url = self.base_url + "getFile"
+                test_data = {"file_id": file_id}
+                test_response = requests.post(url, data=test_data, timeout=10)
+                if test_response.json().get('ok'):
+                    file_id_valid = True
+                    print(f"✅ File_id is universally accessible: {file_id[:20]}...")
+                else:
+                    print(f"⚠️ File_id may not be universally accessible")
             
             # Prepare game info
             game_info = {
@@ -4520,7 +4483,7 @@ This game already exists in the database:"""
                 'added_by': user_id,
                 'is_uploaded': 1,  # Mark as uploaded by admin
                 'is_forwarded': 1 if is_forwarded else 0,
-                'file_id': file_id if file_id_accessible else None,  # Only store if accessible
+                'file_id': file_id if file_id_valid else None,  # Only store valid file_ids
                 'bot_message_id': bot_message_id  # Store the actual bot message ID
             }
             
@@ -4552,7 +4515,7 @@ This game already exists in the database:"""
             # Send confirmation
             size = self.format_file_size(file_size)
             source_type = "Channel Forward" if original_message_id else "Direct Upload"
-            file_access = "✅ Universal Access" if file_id_accessible else "⚠️ Forwarding Required"
+            file_access = "✅ Universal Access" if file_id_valid else "⚠️ Forwarding Required"
             
             confirm_text = f"""✅ Game file added successfully!{forward_info}
 
@@ -4930,9 +4893,6 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             return False
     
     # ==================== YOUR ORIGINAL METHODS (SIMPLIFIED) ====================
-    
-    # These are the original methods from your code that I've kept
-    # I've removed the callback query handling parts since we're using regular keyboards
     
     def handle_verification(self, message):
         """Handle /start command and send verification code"""
