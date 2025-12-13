@@ -2440,7 +2440,7 @@ Have fun! 🎉"""
             elif data == "back_to_menu":
                 welcome_text = f"""👋 Welcome {first_name}!
 
-🤖 <b>Cross-Platform Telegram Bot</b>
+🤖 <b>GAMERDROID™ V1</b>
 
 📊 Features:
 • 🎮 Game File Browser
