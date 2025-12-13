@@ -31,8 +31,6 @@ print("Game Removal System with Duplicate Detection")
 print("Redeploy System for Admins and Users")
 print("GitHub Database Backup & Restore System")
 print("24/7 Operation with Persistent Data Recovery")
-print("Paginated Game Lists + Admin Reply System")
-print("Direct File Uploads with Inline Confirmation")
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -1381,9 +1379,6 @@ class CrossPlatformBot:
         print("🛡️  Crash protection enabled")
         print("🔋 Enhanced keep-alive system ready")
         print("💾 Persistent data recovery enabled")
-        print("📄 Paginated game lists enabled")
-        print("📋 Admin game request panel enabled")
-        print("📤 Direct file uploads with inline confirmation enabled")
     
     def initialize_with_persistence(self):
         """Initialize bot with persistent data recovery including GitHub restore"""
@@ -1859,408 +1854,6 @@ If the issue persists, please contact the admins directly."""
             print(f"❌ User redeploy request error: {e}")
             self.edit_message(chat_id, message_id, "❌ Error processing redeploy request.", self.create_main_menu_buttons())
 
-    # ==================== INTEGRATED FEATURES ====================
-
-    # ==================== ADMIN GAME REQUEST PANEL ====================
-
-    def show_admin_game_requests(self, user_id, chat_id, message_id=None):
-        """Show game requests for admin with inline reply buttons"""
-        if not self.is_admin(user_id):
-            if message_id:
-                self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
-            else:
-                self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
-            return
-        
-        pending_requests = self.game_request_system.get_pending_requests(10)
-        
-        if not pending_requests:
-            requests_text = """📋 <b>Pending Game Requests</b>
-
-✅ No pending game requests.
-
-All requests have been processed!"""
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔄 Refresh", "callback_data": "admin_requests_panel"}],
-                    [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
-                ]
-            }
-            
-            if message_id:
-                self.edit_message(chat_id, message_id, requests_text, keyboard)
-            else:
-                self.robust_send_message(chat_id, requests_text, keyboard)
-            return
-        
-        # Create inline keyboard with reply buttons
-        keyboard_buttons = []
-        for request in pending_requests:
-            req_id, req_user_id, user_name, game_name, platform, created_at = request
-            date_str = datetime.fromisoformat(created_at).strftime('%m/%d')
-            
-            button_text = f"📝 Reply to {user_name} - {game_name}"
-            callback_data = f"reply_request_{req_id}"
-            
-            keyboard_buttons.append({
-                "text": button_text,
-                "callback_data": callback_data
-            })
-        
-        # Add navigation
-        keyboard_buttons.append({
-            "text": "🔙 Back to Admin",
-            "callback_data": "admin_panel"
-        })
-        
-        keyboard = self.create_inline_keyboard(keyboard_buttons, 1)
-        
-        requests_text = f"""📋 <b>Pending Game Requests</b>
-
-📊 Found: {len(pending_requests)} pending requests
-
-Click on any request below to reply individually:"""
-        
-        if message_id:
-            self.edit_message(chat_id, message_id, requests_text, keyboard)
-        else:
-            self.send_message_with_inline(chat_id, requests_text, keyboard)
-
-    def handle_request_reply_callback(self, user_id, chat_id, request_id):
-        """Handle request reply via inline callback"""
-        if not self.is_admin(user_id):
-            return
-        
-        request = self.game_request_system.get_request_by_id(request_id)
-        if not request:
-            self.robust_send_message(chat_id, "❌ Request not found.")
-            return
-        
-        # Start reply session
-        self.reply_sessions[user_id] = {
-            'stage': 'waiting_reply',
-            'request_id': request_id,
-            'type': 'text',
-            'chat_id': chat_id
-        }
-        
-        reply_text = f"""📝 <b>Reply to Game Request</b>
-
-🎮 Game: <b>{request['game_name']}</b>
-👤 User: {request['user_name']} (ID: {request['user_id']})
-📱 Platform: {request['platform']}
-🆔 Request ID: {request_id}
-
-💬 <b>Please type your reply message:</b>
-
-You can also send a photo with your reply."""
-        
-        self.robust_send_message(chat_id, reply_text)
-
-    # ==================== PAGINATED GAME LIST ====================
-
-    def show_paginated_game_list(self, user_id, chat_id, file_type, display_name, page=0, items_per_page=10):
-        """Show paginated game list with inline navigation"""
-        if file_type == "psp":
-            cso_games = self.games_cache.get('cso', [])
-            pbp_games = self.games_cache.get('pbp', [])
-            games = cso_games + pbp_games
-        elif file_type == "all":
-            games = self.games_cache.get('all', [])
-        else:
-            games = self.games_cache.get(file_type, [])
-        
-        if not games:
-            self.robust_send_message(chat_id, 
-                f"❌ No {display_name} games found.",
-                self.create_game_files_buttons()
-            )
-            return
-        
-        # Pagination logic
-        total_pages = (len(games) + items_per_page - 1) // items_per_page
-        page = min(page, total_pages - 1)
-        
-        start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(games))
-        games_to_show = games[start_idx:end_idx]
-        
-        # Create inline keyboard
-        keyboard_buttons = []
-        
-        # Add game download buttons
-        for game in games_to_show:
-            game_name = game['file_name']
-            if len(game_name) > 30:
-                display_game_name = game_name[:27] + "..."
-            else:
-                display_game_name = game_name
-            
-            # Create callback data for download
-            callback_data = f"download_{game['message_id']}_{game.get('file_id', '')}"
-            
-            keyboard_buttons.append({
-                "text": f"📥 {display_game_name}",
-                "callback_data": callback_data
-            })
-        
-        # Add navigation buttons
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append({
-                "text": "⬅️ Previous",
-                "callback_data": f"page_{file_type}_{page-1}"
-            })
-        
-        nav_buttons.append({
-            "text": f"📄 {page+1}/{total_pages}",
-            "callback_data": "current_page"
-        })
-        
-        if page < total_pages - 1:
-            nav_buttons.append({
-                "text": "Next ➡️",
-                "callback_data": f"page_{file_type}_{page+1}"
-            })
-        
-        if nav_buttons:
-            keyboard_buttons.append(nav_buttons)
-        
-        # Add back button
-        keyboard_buttons.append({
-            "text": "🔙 Back to Games",
-            "callback_data": "game_files"
-        })
-        
-        keyboard = self.create_inline_keyboard(keyboard_buttons, 1)
-        
-        # Create message text
-        games_text = f"""📁 <b>{display_name} GAMES</b>
-
-📊 Found: {len(games)} files
-📋 Showing: {start_idx + 1}-{end_idx} of {len(games)} files
-
-Click on any game below to download it instantly! 📥"""
-        
-        self.send_message_with_inline(chat_id, games_text, keyboard)
-
-    def send_message_with_inline(self, chat_id, text, inline_keyboard):
-        """Send message with inline keyboard"""
-        try:
-            url = self.base_url + "sendMessage"
-            data = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "reply_markup": json.dumps(inline_keyboard)
-            }
-            
-            response = requests.post(url, data=data, timeout=15)
-            result = response.json()
-            
-            if result.get('ok'):
-                return result
-            else:
-                print(f"❌ Send message with inline error: {result.get('description')}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Send message with inline error: {e}")
-            return None
-
-    # ==================== SEND GAME FILE WITH INLINE ====================
-
-    def send_file_with_inline(self, chat_id, file_id, file_name, caption=None):
-        """Send file with inline download confirmation"""
-        try:
-            if not caption:
-                caption = f"🎮 {file_name}\n\nClick the button below to download!"
-            
-            # Send the file
-            url = self.base_url + "sendDocument"
-            data = {
-                "chat_id": chat_id,
-                "document": file_id,
-                "caption": caption,
-                "parse_mode": "HTML"
-            }
-            
-            response = requests.post(url, data=data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                # Send inline confirmation
-                confirm_text = f"✅ <b>File Sent Successfully!</b>\n\n📁 {file_name}"
-                
-                keyboard = {
-                    "inline_keyboard": [[
-                        {"text": "📥 Download Again", "callback_data": f"redownload_{file_id}"},
-                        {"text": "🔍 Search More", "callback_data": "search_more"}
-                    ]]
-                }
-                
-                self.send_message_with_inline(chat_id, confirm_text, keyboard)
-                return True
-            else:
-                print(f"❌ Error sending file: {result.get('description')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error sending file with inline: {e}")
-            return False
-
-    def handle_direct_file_upload(self, message):
-        """Handle direct file uploads from admins with enhanced features"""
-        try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            
-            if not self.is_admin(user_id):
-                return False
-            
-            if 'document' not in message:
-                return False
-            
-            doc = message['document']
-            file_name = doc.get('file_name', 'Unknown')
-            file_id = doc.get('file_id', '')
-            file_size = doc.get('file_size', 0)
-            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
-            
-            print(f"📤 Direct upload from admin {user_id}: {file_name}")
-            
-            # Check if this is a premium upload
-            is_premium = False
-            if user_id in self.upload_sessions and self.upload_sessions[user_id].get('type') == 'premium':
-                is_premium = True
-            
-            # Store in database
-            upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            if is_premium:
-                # Premium game upload
-                session = self.upload_sessions[user_id]
-                game_info = {
-                    'message_id': int(time.time() * 1000),
-                    'file_name': file_name,
-                    'file_type': file_type,
-                    'file_size': file_size,
-                    'upload_date': upload_date,
-                    'category': self.determine_file_category(file_name),
-                    'added_by': user_id,
-                    'is_uploaded': 1,
-                    'is_forwarded': 0,
-                    'file_id': file_id,
-                    'bot_message_id': message['message_id'],
-                    'stars_price': session['stars_price'],
-                    'description': session.get('description', ''),
-                    'is_premium': 1
-                }
-                
-                game_id = self.premium_games_system.add_premium_game(game_info)
-                
-                if game_id:
-                    confirm_text = f"""✅ <b>Premium Game Uploaded!</b>
-
-🎮 {file_name}
-💰 Price: {session['stars_price']} Stars
-📦 Type: {file_type}
-📏 Size: {self.format_file_size(file_size)}
-🆔 Game ID: {game_id}
-
-The game is now available in the premium section!"""
-                    
-                    del self.upload_sessions[user_id]
-            else:
-                # Regular game upload
-                game_info = {
-                    'message_id': int(time.time() * 1000),
-                    'file_name': file_name,
-                    'file_type': file_type,
-                    'file_size': file_size,
-                    'upload_date': upload_date,
-                    'category': self.determine_file_category(file_name),
-                    'added_by': user_id,
-                    'is_uploaded': 1,
-                    'is_forwarded': 0,
-                    'file_id': file_id,
-                    'bot_message_id': message['message_id']
-                }
-                
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO channel_games 
-                    (message_id, file_name, file_type, file_size, upload_date, category, 
-                     added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    game_info['message_id'],
-                    game_info['file_name'],
-                    game_info['file_type'],
-                    game_info['file_size'],
-                    game_info['upload_date'],
-                    game_info['category'],
-                    game_info['added_by'],
-                    game_info['is_uploaded'],
-                    game_info['is_forwarded'],
-                    game_info['file_id'],
-                    game_info['bot_message_id']
-                ))
-                self.conn.commit()
-                
-                confirm_text = f"""✅ <b>Game Uploaded Successfully!</b>
-
-📁 {file_name}
-📦 Type: {file_type}
-📏 Size: {self.format_file_size(file_size)}
-🗂️ Category: {game_info['category']}
-
-The file is now available to all users!"""
-            
-            # Send confirmation with inline keyboard
-            keyboard = {
-                "inline_keyboard": [[
-                    {"text": "📤 Upload Another", "callback_data": "upload_more"},
-                    {"text": "👑 Admin Panel", "callback_data": "admin_panel"}
-                ]]
-            }
-            
-            self.send_message_with_inline(chat_id, confirm_text, keyboard)
-            
-            # Update cache
-            self.update_games_cache()
-            
-            # Trigger backup
-            self.backup_after_game_action("Direct Upload", file_name)
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Direct upload error: {e}")
-            self.robust_send_message(chat_id, f"❌ Upload failed: {str(e)}")
-            return False
-
-    # ==================== HELPER METHODS ====================
-
-    def create_inline_keyboard(self, buttons, columns=2):
-        """Create inline keyboard from list of buttons"""
-        keyboard = {"inline_keyboard": []}
-        
-        if isinstance(buttons[0], dict):
-            # Single row of buttons
-            row = []
-            for i, button in enumerate(buttons):
-                row.append(button)
-                if (i + 1) % columns == 0 or i == len(buttons) - 1:
-                    keyboard["inline_keyboard"].append(row)
-                    row = []
-        else:
-            # Already formatted as rows
-            keyboard["inline_keyboard"] = buttons
-        
-        return keyboard
-
     # ==================== UPDATED CALLBACK HANDLER ====================
 
     def handle_callback_query(self, callback_query):
@@ -2276,72 +1869,6 @@ The file is now available to all users!"""
             
             self.answer_callback_query(callback_query['id'])
             
-            # Handle pagination callbacks
-            if data.startswith("page_"):
-                parts = data.replace("page_", "").split("_")
-                if len(parts) >= 2:
-                    file_type = parts[0]
-                    page = int(parts[1])
-                    
-                    display_names = {
-                        'zip': 'ZIP', '7z': '7Z', 'iso': 'ISO', 'apk': 'APK',
-                        'psp': 'PSP', 'all': 'ALL'
-                    }
-                    display_name = display_names.get(file_type, file_type.upper())
-                    
-                    self.show_paginated_game_list(user_id, chat_id, file_type, display_name, page)
-                return
-            
-            # Handle download callbacks
-            elif data.startswith("download_"):
-                parts = data.replace("download_", "").split("_")
-                if len(parts) >= 2:
-                    message_id_to_send = int(parts[0])
-                    file_id = parts[1] if len(parts) > 1 else None
-                    
-                    if file_id == 'short':
-                        file_id = None
-                    else:
-                        file_id = file_id.replace('_', '-').replace('eq', '=')
-                    
-                    self.answer_callback_query(callback_query['id'], "📥 Sending file...", False)
-                    
-                    # Use the new send_file_with_inline method
-                    cursor = self.conn.cursor()
-                    cursor.execute('SELECT file_name, file_id FROM channel_games WHERE message_id = ?', (message_id_to_send,))
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        file_name, actual_file_id = result
-                        if actual_file_id:
-                            success = self.send_file_with_inline(chat_id, actual_file_id, file_name)
-                            if success:
-                                self.answer_callback_query(callback_query['id'], "✅ File sent!", False)
-                            else:
-                                self.answer_callback_query(callback_query['id'], "❌ Failed to send file.", True)
-                    else:
-                        self.answer_callback_query(callback_query['id'], "❌ File not found.", True)
-                return
-            
-            # Handle redownload callbacks
-            elif data.startswith("redownload_"):
-                file_id = data.replace("redownload_", "").replace('_', '-').replace('eq', '=')
-                
-                cursor = self.conn.cursor()
-                cursor.execute('SELECT file_name FROM channel_games WHERE file_id = ?', (file_id,))
-                result = cursor.fetchone()
-                
-                if result:
-                    file_name = result[0]
-                    success = self.send_file_with_inline(chat_id, file_id, file_name)
-                    if success:
-                        self.answer_callback_query(callback_query['id'], "✅ File sent again!", False)
-                    else:
-                        self.answer_callback_query(callback_query['id'], "❌ Failed to send file.", True)
-                else:
-                    self.answer_callback_query(callback_query['id'], "❌ File not found.", True)
-                return
-
             # Backup System Callbacks
             if data == "backup_menu":
                 if not self.is_admin(user_id):
@@ -2476,19 +2003,6 @@ The file is now available to all users!"""
                 self.edit_message(chat_id, message_id, uploads_text, keyboard)
                 return
 
-            # Admin Game Request Panel Callbacks
-            elif data == "admin_requests_panel":
-                if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
-                    return
-                self.show_admin_game_requests(user_id, chat_id, message_id)
-                return
-            
-            elif data.startswith("reply_request_"):
-                request_id = int(data.replace("reply_request_", ""))
-                self.handle_request_reply_callback(user_id, chat_id, request_id)
-                return
-
             # Premium games callbacks
             if data == "premium_games":
                 self.show_premium_games_menu(user_id, chat_id, message_id)
@@ -2526,16 +2040,6 @@ The file is now available to all users!"""
                 
             elif data == "upload_premium":
                 self.start_premium_upload(user_id, chat_id)
-                return
-
-            elif data == "upload_more":
-                if not self.is_admin(user_id):
-                    return
-                self.robust_send_message(chat_id,
-                    "📤 <b>Upload Another File</b>\n\n"
-                    "Please upload another game file.\n\n"
-                    "📁 Supported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP"
-                )
                 return
 
             # Game request management callbacks
@@ -2609,6 +2113,11 @@ The file is now available to all users!"""
                 
             elif data == "my_requests":
                 self.show_user_requests(user_id, chat_id, message_id)
+                return
+
+            # Admin game request management
+            elif data == "admin_requests_panel":
+                self.show_admin_requests_panel(user_id, chat_id, message_id)
                 return
 
             # Broadcast system callbacks
@@ -2731,7 +2240,7 @@ Choose an option:"""
                 self.edit_message(chat_id, message_id, f"✅ Bot games scan complete! Found {bot_games_found} new games.", self.create_admin_buttons())
                 return
 
-            # Handle game file sending with proper message ID handling
+            # ==================== FIXED: Handle game file sending directly as documents ====================
             if data.startswith('send_game_'):
                 parts = data.replace('send_game_', '').split('_')
                 if len(parts) >= 3:
@@ -2747,7 +2256,10 @@ Choose an option:"""
                     
                     self.answer_callback_query(callback_query['id'], "📥 Sending file...", False)
                     
-                    if self.send_game_file(chat_id, message_id_to_send, file_id, is_bot_file):
+                    # Send the file directly as a document using the file_id
+                    success = self.send_document_by_file_id(chat_id, file_id, is_bot_file, message_id_to_send)
+                    
+                    if success:
                         self.answer_callback_query(callback_query['id'], "✅ File sent!", False)
                     else:
                         self.answer_callback_query(callback_query['id'], "❌ Failed to send file. Please try again or contact admin.", True)
@@ -2889,53 +2401,35 @@ Have fun! 🎉"""
                 
             elif data == "game_zip":
                 games = self.games_cache.get('zip', [])
-                if games:
-                    self.show_paginated_game_list(user_id, chat_id, "zip", "ZIP", 0)
-                else:
-                    text = self.format_games_list(games, "ZIP")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(games, "ZIP")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "game_7z":
                 games = self.games_cache.get('7z', [])
-                if games:
-                    self.show_paginated_game_list(user_id, chat_id, "7z", "7Z", 0)
-                else:
-                    text = self.format_games_list(games, "7Z")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(games, "7Z")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "game_iso":
                 games = self.games_cache.get('iso', [])
-                if games:
-                    self.show_paginated_game_list(user_id, chat_id, "iso", "ISO", 0)
-                else:
-                    text = self.format_games_list(games, "ISO")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(games, "ISO")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "game_apk":
                 games = self.games_cache.get('apk', [])
-                if games:
-                    self.show_paginated_game_list(user_id, chat_id, "apk", "APK", 0)
-                else:
-                    text = self.format_games_list(games, "APK")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(games, "APK")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "game_psp":
                 cso_games = self.games_cache.get('cso', [])
                 pbp_games = self.games_cache.get('pbp', [])
                 psp_games = cso_games + pbp_games
-                if psp_games:
-                    self.show_paginated_game_list(user_id, chat_id, "psp", "PSP", 0)
-                else:
-                    text = self.format_games_list(psp_games, "PSP")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(psp_games, "PSP")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "game_all":
                 games = self.games_cache.get('all', [])
-                if games:
-                    self.show_paginated_game_list(user_id, chat_id, "all", "ALL", 0)
-                else:
-                    text = self.format_games_list(games, "ALL")
-                    self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+                text = self.format_games_list(games, "ALL")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 
             elif data == "rescan_games":
                 self.edit_message(chat_id, message_id, "🔄 Scanning for new games...", self.create_game_files_buttons())
@@ -2949,11 +2443,11 @@ Have fun! 🎉"""
 🤖 <b>Cross-Platform Telegram Bot</b>
 
 📊 Features:
-• 🎮 Game File Browser with Pagination
+• 🎮 Game File Browser
 • 💰 Premium Games with Stars
 • 🔍 Advanced Game Search  
 • 📱 Cross-Platform Support
-• 📤 Admin Upload System with Inline Confirmation
+• 📤 Admin Upload System
 • 🔄 Forward Support
 • 🕒 Real-time Updates
 • 🎮 Mini-Games Entertainment
@@ -2980,7 +2474,7 @@ Choose an option below:"""
 👋 Welcome {first_name}!
 
 🎉 You now have full access to:
-• 🎮 Game File Browser with Pagination
+• 🎮 Game File Browser  
 • 💰 Premium Games
 • 🔍 Game Search
 • 📁 All Game Categories
@@ -3017,12 +2511,11 @@ Choose an option below:"""
 • 🗑️ Clear all games
 • 🔍 Scan bot-uploaded games
 • 📢 Broadcast messages to users
-• 🎮 Manage game requests with inline replies
+• 🎮 Manage game requests
 • ⭐ View Stars statistics
 • 💾 Backup & Restore Database
 • 🔄 Redeploy bot system
 • 🔍 Monitor system status
-• 📄 Paginated game lists
 
 📊 Your Stats:
 • Total uploads: {self.get_upload_stats(user_id)}
@@ -3054,10 +2547,113 @@ Choose an option:"""
         except Exception as e:
             print(f"Callback error: {e}")
 
+    # ==================== FIXED: ENHANCED FILE SENDING METHODS ====================
+    
+    def send_document_by_file_id(self, chat_id, file_id, is_bot_file, message_id):
+        """Send document directly using file_id"""
+        try:
+            if not file_id or file_id == 'None':
+                # If file_id is not available, try to get it from database
+                cursor = self.conn.cursor()
+                if is_bot_file:
+                    cursor.execute('SELECT file_id FROM channel_games WHERE bot_message_id = ?', (message_id,))
+                else:
+                    cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
+                
+                result = cursor.fetchone()
+                if result and result[0]:
+                    file_id = result[0]
+                else:
+                    # Try to forward as fallback
+                    return self.send_game_file(chat_id, message_id, None, is_bot_file)
+            
+            print(f"📤 Sending document with file_id: {file_id}")
+            
+            url = self.base_url + "sendDocument"
+            data = {
+                "chat_id": chat_id,
+                "document": file_id
+            }
+            
+            response = requests.post(url, data=data, timeout=30)
+            result = response.json()
+            
+            if result.get('ok'):
+                print(f"✅ Sent document using file_id to user {chat_id}")
+                return True
+            else:
+                print(f"❌ Direct send failed: {result.get('description')}")
+                # Fallback to forwarding
+                return self.send_game_file(chat_id, message_id, file_id, is_bot_file)
+                
+        except Exception as e:
+            print(f"❌ Error sending document by file_id: {e}")
+            # Fallback to forwarding
+            return self.send_game_file(chat_id, message_id, file_id, is_bot_file)
+
+    def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
+        """Send game file (forward or send as document)"""
+        try:
+            print(f"📤 Sending game file: msg_id={message_id}, is_bot_file={is_bot_file}, file_id={file_id}")
+            
+            # First try to send as document using file_id
+            if file_id:
+                success = self.send_document_by_file_id(chat_id, file_id, is_bot_file, message_id)
+                if success:
+                    return True
+            
+            # If file_id method fails, try forwarding
+            if is_bot_file:
+                # For bot-uploaded files, forward from the bot's chat
+                url = self.base_url + "forwardMessage"
+                data = {
+                    "chat_id": chat_id,
+                    "from_chat_id": chat_id,  # Important: forward from current chat
+                    "message_id": message_id
+                }
+                
+                response = requests.post(url, data=data, timeout=30)
+                result = response.json()
+                
+                if result.get('ok'):
+                    print(f"✅ Successfully forwarded bot file {message_id}")
+                    return True
+                else:
+                    print(f"❌ Bot file forward failed: {result.get('description')}")
+                    return False
+            else:
+                # For channel files, forward from channel
+                url = self.base_url + "forwardMessage"
+                data = {
+                    "chat_id": chat_id,
+                    "from_chat_id": self.REQUIRED_CHANNEL,
+                    "message_id": message_id
+                }
+                
+                response = requests.post(url, data=data, timeout=30)
+                result = response.json()
+                
+                if result.get('ok'):
+                    print(f"✅ Successfully forwarded channel file {message_id}")
+                    return True
+                else:
+                    print(f"❌ Channel forward failed: {result.get('description')}")
+                    # Try to get file_id from database and send directly
+                    cursor = self.conn.cursor()
+                    cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
+                    result_db = cursor.fetchone()
+                    if result_db and result_db[0]:
+                        return self.send_document_by_file_id(chat_id, result_db[0], False, message_id)
+                    
+                    return False
+                
+        except Exception as e:
+            print(f"❌ Error sending game file: {e}")
+            return False
+
     # ==================== ENHANCED DATABASE OPERATIONS WITH BACKUP ====================
 
     def handle_document_upload(self, message):
-        """Handle document uploads from admins with new integrated features"""
         try:
             user_id = message['from']['id']
             chat_id = message['chat']['id']
@@ -3070,8 +2666,159 @@ Choose an option:"""
                 print("❌ No document in message")
                 return False
             
-            # Use the new integrated method
-            return self.handle_direct_file_upload(message)
+            # Check if this is a premium game upload
+            if user_id in self.upload_sessions and self.upload_sessions[user_id]['type'] == 'premium':
+                result = self.handle_premium_document_upload(message)
+                if result:
+                    # Trigger backup for premium game upload
+                    file_name = message['document'].get('file_name', 'Unknown')
+                    self.backup_after_game_action("Premium Game Upload", file_name)
+                return result
+            
+            # Regular game upload
+            doc = message['document']
+            file_name = doc.get('file_name', 'Unknown File')
+            file_size = doc.get('file_size', 0)
+            file_id = doc.get('file_id', '')
+            file_type = file_name.split('.')[-1].upper() if '.' in file_name else 'UNKNOWN'
+            bot_message_id = message['message_id']
+            
+            print(f"📥 Admin {user_id} uploading: {file_name} (Size: {file_size}, Message ID: {bot_message_id})")
+            
+            # Check for duplicates
+            regular_duplicate, premium_duplicate = self.check_duplicate_game(file_name, file_size, file_type)
+            
+            if regular_duplicate or premium_duplicate:
+                duplicate_text = f"""⚠️ <b>Duplicate Game Detected!</b>
+
+📁 File: <code>{file_name}</code>
+📏 Size: {self.format_file_size(file_size)}
+📦 Type: {file_type}
+
+This game already exists in the database:"""
+                
+                if regular_duplicate:
+                    dup_msg_id, dup_file_name = regular_duplicate
+                    duplicate_text += f"\n\n🆓 <b>Regular Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Message ID: {dup_msg_id}"
+                
+                if premium_duplicate:
+                    dup_id, dup_file_name = premium_duplicate
+                    duplicate_text += f"\n\n💰 <b>Premium Game:</b>"
+                    duplicate_text += f"\n📝 Name: <code>{dup_file_name}</code>"
+                    duplicate_text += f"\n🆔 Game ID: {dup_id}"
+                
+                duplicate_text += "\n\n❌ Upload cancelled. Please upload a different file."
+                
+                # Clean up session
+                if user_id in self.upload_sessions:
+                    del self.upload_sessions[user_id]
+                
+                self.robust_send_message(chat_id, duplicate_text)
+                return True
+            
+            # Check if it's a supported game file
+            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+            if not any(file_name.lower().endswith(ext) for ext in game_extensions):
+                self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
+                print(f"❌ Unsupported file type: {file_name}")
+                return False
+            
+            upload_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Determine if this is a forwarded file
+            is_forwarded = 'forward_origin' in message
+            forward_info = ""
+            original_message_id = None
+            
+            if is_forwarded:
+                forward_origin = message['forward_origin']
+                if 'sender_user' in forward_origin:
+                    forward_user = forward_origin['sender_user']
+                    forward_name = forward_user.get('first_name', 'Unknown')
+                    forward_info = f"\n🔄 Forwarded from: {forward_name}"
+                elif 'chat' in forward_origin:
+                    forward_chat = forward_origin['chat']
+                    forward_title = forward_chat.get('title', 'Unknown Chat')
+                    forward_info = f"\n🔄 Forwarded from: {forward_title}"
+                
+                # Get original message ID for channel forwards
+                if 'chat' in forward_origin and forward_origin['chat']['type'] == 'channel':
+                    original_message_id = message.get('forward_from_message_id')
+                    print(f"📨 Forwarded from channel, original message ID: {original_message_id}")
+            
+            # Generate unique message ID for storage
+            if original_message_id:
+                storage_message_id = original_message_id
+            else:
+                # For bot-uploaded files, create a unique ID
+                storage_message_id = int(time.time() * 1000) + random.randint(1000, 9999)
+            
+            # Prepare game info
+            game_info = {
+                'message_id': storage_message_id,
+                'file_name': file_name,
+                'file_type': file_type,
+                'file_size': file_size,
+                'upload_date': upload_date,
+                'category': self.determine_file_category(file_name),
+                'added_by': user_id,
+                'is_uploaded': 1,  # Mark as uploaded by admin
+                'is_forwarded': 1 if is_forwarded else 0,
+                'file_id': file_id,
+                'bot_message_id': bot_message_id  # Store the actual bot message ID
+            }
+            
+            # Store in database
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO channel_games 
+                (message_id, file_name, file_type, file_size, upload_date, category, 
+                 added_by, is_uploaded, is_forwarded, file_id, bot_message_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                game_info['message_id'],
+                game_info['file_name'],
+                game_info['file_type'],
+                game_info['file_size'],
+                game_info['upload_date'],
+                game_info['category'],
+                game_info['added_by'],
+                game_info['is_uploaded'],
+                game_info['is_forwarded'],
+                game_info['file_id'],
+                game_info['bot_message_id']
+            ))
+            self.conn.commit()
+            
+            # Update cache
+            self.update_games_cache()
+            
+            # Send confirmation
+            size = self.format_file_size(file_size)
+            source_type = "Channel Forward" if original_message_id else "Direct Upload"
+            
+            confirm_text = f"""✅ Game file added successfully!{forward_info}
+
+📁 File: <code>{file_name}</code>
+📦 Type: {file_type}
+📏 Size: {size}
+🗂️ Category: {game_info['category']}
+🕒 Added: {upload_date}
+📮 Source: {source_type}
+🆔 Storage ID: {storage_message_id}
+🤖 Bot Message ID: {bot_message_id}
+
+The file is now available in the games browser and search!"""
+            
+            self.robust_send_message(chat_id, confirm_text)
+            
+            # Trigger backup after successful upload
+            self.backup_after_game_action("Regular Game Upload", file_name)
+            
+            print(f"✅ Successfully stored: {file_name} (Storage ID: {storage_message_id}, Bot Message ID: {bot_message_id})")
+            return True
             
         except Exception as e:
             print(f"❌ Upload error: {e}")
@@ -3615,18 +3362,13 @@ Exclusive games available for purchase with Telegram Stars:
             self.robust_send_message(chat_id, "❌ You haven't purchased this game yet.")
             return False
         
-        # Send the game file using new method
-        if game['is_uploaded'] == 1 and game['file_id']:
-            success = self.send_file_with_inline(chat_id, game['file_id'], game['file_name'], 
-                                                f"🎮 {game['file_name']}\n💰 Premium Game - {game['stars_price']} Stars")
+        # Send the game file
+        if game['is_uploaded'] == 1 and game['bot_message_id']:
+            # Bot-uploaded file
+            success = self.send_game_file(chat_id, game['bot_message_id'], game['file_id'], True)
         else:
-            # Fallback to old method
-            if game['is_uploaded'] == 1 and game['bot_message_id']:
-                # Bot-uploaded file
-                success = self.send_game_file(chat_id, game['bot_message_id'], game['file_id'], True)
-            else:
-                # Channel file
-                success = self.send_game_file(chat_id, game['message_id'], game['file_id'], False)
+            # Channel file
+            success = self.send_game_file(chat_id, game['message_id'], game['file_id'], False)
         
         if success:
             self.robust_send_message(chat_id, f"✅ Enjoy your premium game: <b>{game['file_name']}</b>!")
@@ -5326,92 +5068,6 @@ Always available!
             print(f"❌ Bot games scan error: {e}")
             return 0
 
-    # ==================== IMPROVED FILE SENDING METHODS ====================
-    
-    def send_game_file(self, chat_id, message_id, file_id=None, is_bot_file=False):
-        try:
-            print(f"📤 Sending game file: msg_id={message_id}, is_bot_file={is_bot_file}, file_id={file_id}")
-            
-            if is_bot_file:
-                # For bot-uploaded files, forward from the bot's chat
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": chat_id,  # Important: forward from current chat
-                    "message_id": message_id
-                }
-                
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print(f"✅ Successfully forwarded bot file {message_id}")
-                    return True
-                else:
-                    print(f"❌ Bot file forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id:
-                        return self.send_document_directly(chat_id, file_id)
-                    return False
-            else:
-                # For channel files, forward from channel
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": self.REQUIRED_CHANNEL,
-                    "message_id": message_id
-                }
-                
-                response = requests.post(url, data=data, timeout=30)
-                result = response.json()
-                
-                if result.get('ok'):
-                    print(f"✅ Successfully forwarded channel file {message_id}")
-                    return True
-                else:
-                    print(f"❌ Channel forward failed: {result.get('description')}")
-                    # Fallback to direct send
-                    if file_id and file_id != 'short':
-                        return self.send_document_directly(chat_id, file_id)
-                    else:
-                        # Try to get file_id from database
-                        cursor = self.conn.cursor()
-                        cursor.execute('SELECT file_id FROM channel_games WHERE message_id = ?', (message_id,))
-                        result_db = cursor.fetchone()
-                        if result_db and result_db[0]:
-                            return self.send_document_directly(chat_id, result_db[0])
-                    
-                    return False
-                
-        except Exception as e:
-            print(f"❌ Error sending game file: {e}")
-            return False
-
-    def send_document_directly(self, chat_id, file_id):
-        """Send document directly using file_id"""
-        try:
-            print(f"📤 Sending document directly with file_id: {file_id}")
-            
-            url = self.base_url + "sendDocument"
-            data = {
-                "chat_id": chat_id,
-                "document": file_id
-            }
-            
-            response = requests.post(url, data=data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                print(f"✅ Sent document directly using file_id to user {chat_id}")
-                return True
-            else:
-                print(f"❌ Direct send failed: {result.get('description')}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error sending document directly: {e}")
-            return False
-
     # ==================== SEARCH GAMES METHODS ====================
     
     def search_games(self, search_term, user_id):
@@ -5988,7 +5644,7 @@ Always available!
     def update_games_cache(self):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT message_id, file_name, file_type, file_size, upload_date, category, is_uploaded, file_id FROM channel_games')
+            cursor.execute('SELECT file_name, file_type, file_size, upload_date, category, is_uploaded FROM channel_games')
             games = cursor.fetchall()
             
             self.games_cache = {
@@ -5997,16 +5653,14 @@ Always available!
             }
             
             for game in games:
-                message_id, file_name, file_type, file_size, upload_date, category, is_uploaded, file_id = game
+                file_name, file_type, file_size, upload_date, category, is_uploaded = game
                 game_info = {
-                    'message_id': message_id,
                     'file_name': file_name,
                     'file_type': file_type,
                     'file_size': file_size,
                     'upload_date': upload_date,
                     'category': category,
-                    'is_uploaded': is_uploaded,
-                    'file_id': file_id
+                    'is_uploaded': is_uploaded
                 }
                 
                 file_type_lower = file_type.lower()
@@ -6809,7 +6463,7 @@ After code verification, you'll need to join our channel."""
 👋 Welcome {first_name}!
 
 🎉 You now have full access to:
-• 🎮 Game File Browser with Pagination
+• 🎮 Game File Browser  
 • 💰 Premium Games
 • 🔍 Game Search
 • 📁 All Game Categories
