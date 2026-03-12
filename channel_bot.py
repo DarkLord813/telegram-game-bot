@@ -2440,7 +2440,7 @@ Have fun! 🎉"""
             elif data == "back_to_menu":
                 welcome_text = f"""👋 Welcome {first_name}!
 
-🤖 <b>GAMERDROID™ V1</b>
+🤖 <b>Cross-Platform Telegram Bot</b>
 
 📊 Features:
 • 🎮 Game File Browser
@@ -3906,6 +3906,15 @@ You can send messages to all bot subscribers.
                         "parse_mode": "HTML"
                     }
                     response = requests.post(photo_url, data=photo_data, timeout=30)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('ok'):
+                            success_count += 1
+                        else:
+                            failed_count += 1
+                    else:
+                        failed_count += 1
                 else:
                     # Send text broadcast
                     response = requests.post(self.base_url + "sendMessage", data={
@@ -3913,11 +3922,15 @@ You can send messages to all bot subscribers.
                         "text": message_text,
                         "parse_mode": "HTML"
                     }, timeout=30)
-                
-                if response.json().get('ok'):
-                    success_count += 1
-                else:
-                    failed_count += 1
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('ok'):
+                            success_count += 1
+                        else:
+                            failed_count += 1
+                    else:
+                        failed_count += 1
                 
                 # Update progress every 10 messages
                 if (i + 1) % 10 == 0 or (i + 1) == total_users:
