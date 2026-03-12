@@ -6149,6 +6149,39 @@ Use this ID for admin verification if needed."""
     def process_message(self, message):
         """Main message processing function"""
         try:
+            # Check for forwarded messages first
+            if 'forward_origin' in message:
+                print(f"🔄 Forwarded message received from user {message['from']['id']}")
+                
+                # Check if it's an admin and in broadcast session
+                user_id = message['from']['id']
+                chat_id = message['chat']['id']
+                
+                if self.is_admin(user_id) and user_id in self.broadcast_sessions:
+                    session = self.broadcast_sessions[user_id]
+                    
+                    if session['stage'] == 'waiting_message_or_photo':
+                        # Handle forwarded photo
+                        if 'photo' in message:
+                            photo = message['photo'][-1]
+                            photo_file_id = photo['file_id']
+                            caption = message.get('caption', '')
+                            print(f"📸 Processing forwarded broadcast photo with caption: {caption}")
+                            return self.handle_broadcast_photo(user_id, chat_id, photo_file_id, caption)
+                        
+                        # Handle forwarded text
+                        elif 'text' in message:
+                            text = message['text']
+                            print(f"📝 Processing forwarded broadcast text: {text}")
+                            return self.handle_broadcast_message(user_id, chat_id, text)
+                
+                # Handle as regular document upload for admins
+                elif 'document' in message and self.is_admin(user_id):
+                    return self.handle_document_upload(message)
+                
+                return True
+            
+            # Regular message processing (non-forwarded)
             if 'text' in message:
                 text = message['text']
                 chat_id = message['chat']['id']
@@ -6339,7 +6372,9 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             
             # Handle photo messages for broadcasts and request replies
             if 'photo' in message:
-                print(f"📸 Photo message received from user {user_id}")
+                print(f"📸 Photo message received from user {message['from']['id']}")
+                user_id = message['from']['id']
+                chat_id = message['chat']['id']
                 
                 # Check if this is a broadcast photo
                 if user_id in self.broadcast_sessions:
@@ -6362,10 +6397,6 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             # Handle document uploads from admins
             if 'document' in message and self.is_admin(message['from']['id']):
                 return self.handle_document_upload(message)
-            
-            # Handle forwarded messages from admins
-            if 'forward_origin' in message and self.is_admin(message['from']['id']):
-                return self.handle_forwarded_message(message)
             
             return False
             
