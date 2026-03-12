@@ -2440,7 +2440,7 @@ Have fun! 🎉"""
             elif data == "back_to_menu":
                 welcome_text = f"""👋 Welcome {first_name}!
 
-🤖 <b>Cross-Platform Telegram Bot</b>
+🤖 <b>GAMERDROID™ V1</b>
 
 📊 Features:
 • 🎮 Game File Browser
@@ -3852,8 +3852,14 @@ You can send messages to all bot subscribers.
             }
             
             try:
-                requests.post(photo_url, data=photo_data, timeout=30)
-                return True
+                response = requests.post(photo_url, data=photo_data, timeout=30)
+                result = response.json()
+                if result.get('ok'):
+                    print(f"✅ Photo preview sent to admin {user_id}")
+                    return True
+                else:
+                    print(f"❌ Failed to send photo preview: {result.get('description')}")
+                    return False
             except Exception as e:
                 print(f"❌ Error sending photo preview: {e}")
                 return False
@@ -3863,6 +3869,7 @@ You can send messages to all bot subscribers.
     def send_broadcast_to_all_enhanced(self, user_id, chat_id):
         """Send enhanced broadcast (text or photo) to all users"""
         if user_id not in self.broadcast_sessions:
+            self.robust_send_message(chat_id, "❌ No active broadcast session.")
             return False
             
         session = self.broadcast_sessions[user_id]
@@ -6332,12 +6339,18 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             
             # Handle photo messages for broadcasts and request replies
             if 'photo' in message:
+                print(f"📸 Photo message received from user {user_id}")
+                
                 # Check if this is a broadcast photo
-                if user_id in self.broadcast_sessions and self.broadcast_sessions[user_id]['stage'] == 'waiting_message_or_photo':
-                    photo = message['photo'][-1]  # Get the highest resolution photo
-                    photo_file_id = photo['file_id']
-                    caption = message.get('caption', '')
-                    return self.handle_broadcast_photo(user_id, chat_id, photo_file_id, caption)
+                if user_id in self.broadcast_sessions:
+                    print(f"📸 User {user_id} is in broadcast session with stage: {self.broadcast_sessions[user_id]['stage']}")
+                    
+                    if self.broadcast_sessions[user_id]['stage'] == 'waiting_message_or_photo':
+                        photo = message['photo'][-1]  # Get the highest resolution photo
+                        photo_file_id = photo['file_id']
+                        caption = message.get('caption', '')
+                        print(f"📸 Processing broadcast photo with caption: {caption}")
+                        return self.handle_broadcast_photo(user_id, chat_id, photo_file_id, caption)
                 
                 # Check if this is a request reply photo
                 if user_id in self.reply_sessions and self.reply_sessions[user_id]['stage'] == 'waiting_photo':
@@ -6358,6 +6371,7 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             
         except Exception as e:
             print(f"❌ Process message error: {e}")
+            traceback.print_exc()
             return False
 
     def handle_verification(self, message):
