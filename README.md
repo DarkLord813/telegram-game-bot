@@ -11,6 +11,7 @@ A cross-platform Telegram bot for game distribution with mini-games integration.
 - 🔍 **Advanced Search** - Real-time game search
 - 📱 **Cross-Platform** - Supports multiple game formats
 - ⭐ **Star Payment** - Supports donations from users
+- 🪙 **Referral System** - supports refer and earn
 - 💰 **Premium Games** - Supports Payments For Premium Games
 - 💾 **GitHub Backup** - Support data backup and retrieval from GitHub
 - 🔄 **Redeploy System** - Redeploy directly from telegram bot
