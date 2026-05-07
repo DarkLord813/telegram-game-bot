@@ -191,6 +191,7 @@ def set_webhook():
     
     if not public_url:
         print("⚠️ No public URL found, webhook not set")
+        print("⚠️ Please set CHOREO_URL environment variable")
         return False
     
     webhook_url = f"{public_url}/webhook"
@@ -1722,15 +1723,6 @@ class CrossPlatformBot:
         self.CHANNEL_LINK = "https://t.me/pspgamers5"
         self.ADMIN_IDS = [7475473197, 7713987088]
         
-        # Initialize all systems
-        self.referral_system = ReferralSystem(self)
-        self.broadcast_system = EnhancedBroadcastSystem(self)
-        self.stars_system = TelegramStarsSystem(self)
-        self.game_request_system = GameRequestSystem(self)
-        self.premium_games_system = PremiumGamesSystem(self)
-        self.redeploy_system = RedeploySystem(self)
-        self.github_backup = GitHubBackupSystem(self)
-        
         # Session management
         self.stars_sessions = {}
         self.request_sessions = {}
@@ -1756,8 +1748,18 @@ class CrossPlatformBot:
         self.is_scanning = False
         self.keep_alive = None
         
+        # ===== IMPORTANT: Setup database FIRST =====
         self.setup_database()
         self.verify_database_schema()
+        
+        # ===== THEN initialize all systems that need database =====
+        self.referral_system = ReferralSystem(self)
+        self.broadcast_system = EnhancedBroadcastSystem(self)
+        self.stars_system = TelegramStarsSystem(self)
+        self.game_request_system = GameRequestSystem(self)
+        self.premium_games_system = PremiumGamesSystem(self)
+        self.redeploy_system = RedeploySystem(self)
+        self.github_backup = GitHubBackupSystem(self)
         
         print("✅ Bot system ready!")
         print("👥 Referral System Active - 1 Game Token per referral")
@@ -3090,7 +3092,7 @@ if __name__ == "__main__":
     print("💾 GitHub Auto-Backup will trigger on every game upload")
     print("🌐 Webhook mode enabled for 24/7 operation")
     
-    # Start webhook server instead of health check server
+    # Start webhook server
     start_webhook_server()
     time.sleep(2)
     
