@@ -112,21 +112,26 @@ def health_check():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Telegram webhook endpoint for 24/7 operation"""
+    """Telegram webhook endpoint - ALWAYS RETURNS 200 OK"""
     try:
         if not bot_instance:
-            return jsonify({'ok': False, 'error': 'Bot not ready'}), 503
+            print("⚠️ Webhook received but bot not ready")
+            # Still return 200 to prevent Telegram from retrying
+            return jsonify({'ok': False, 'error': 'Bot not ready'}), 200
         
         update = request.get_json()
         if update:
             # Process in background thread for fast response
             thread = Thread(target=bot_instance.process_webhook_update, args=(update,))
             thread.start()
+            print(f"📨 Webhook update received, processing in background")
         
+        # ALWAYS return 200 OK - This is critical!
         return jsonify({'ok': True}), 200
     except Exception as e:
         print(f"Webhook error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        # Even on error, return 200 to prevent Telegram from retrying indefinitely
+        return jsonify({'ok': False, 'error': str(e)}), 200
 
 @app.route('/redeploy', methods=['POST'])
 def redeploy_bot():
@@ -199,7 +204,8 @@ def set_webhook():
     try:
         # Delete old webhook
         delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-        requests.post(delete_url, timeout=10)
+        delete_response = requests.post(delete_url, timeout=10)
+        print(f"Delete webhook response: {delete_response.json()}")
         
         # Set new webhook
         set_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
@@ -2608,8 +2614,7 @@ Choose reply type:"""
             elif data.startswith("buy_with_tokens_"):
                 game_id = int(data.replace("buy_with_tokens_", ""))
                 self.purchase_with_tokens(user_id, chat_id, game_id)
-                return
-            elif data.startswith("buy_with_stars_"):
+                return            elif data.startswith("buy_with_stars_"):
                 game_id = int(data.replace("buy_with_stars_", ""))
                 self.purchase_with_stars(user_id, chat_id, game_id)
                 return
