@@ -34,7 +34,8 @@ print("24/7 Operation with Persistent Data Recovery")
 print("REFERRAL SYSTEM WITH GAME TOKENS")  # NEW
 print("GAME TOKEN PAYMENTS FOR PREMIUM GAMES")  # NEW
 print("XAPK & APKS FILE SUPPORT")  # NEW
-print("AUTO BACKUP ON EVERY GAME UPLOAD")  # NEW
+print("AUTO GITHUB BACKUP ON EVERY GAME UPLOAD")  # NEW
+print("WEBHOOK MODE FOR 24/7 OPERATION")  # NEW
 print("=" * 50)
 
 # ==================== RENDER DEBUG SECTION ====================
@@ -76,20 +77,24 @@ except ImportError as e:
 # Health check server
 app = Flask(__name__)
 
+# Global bot instance for webhook
+bot_instance = None
+
 @app.route('/health')
 def health_check():
     """Enhanced health check endpoint for Render monitoring"""
     try:
         bot_status = 'unknown'
-        if 'bot' in globals() and hasattr(bot, 'test_bot_connection'):
-            bot_status = 'healthy' if bot.test_bot_connection() else 'unhealthy'
+        if bot_instance and hasattr(bot_instance, 'test_bot_connection'):
+            bot_status = 'healthy' if bot_instance.test_bot_connection() else 'unhealthy'
         
         health_status = {
             'status': 'healthy',
             'timestamp': time.time(),
             'service': 'telegram-game-bot',
-            'version': '1.0.0',
+            'version': '2.0.0',
             'bot_status': bot_status,
+            'mode': 'webhook',
             'checks': {
                 'bot_online': {'status': bot_status, 'message': f'Bot is {bot_status}'},
                 'system': {'status': 'healthy', 'message': 'System operational'},
@@ -104,6 +109,24 @@ def health_check():
             'timestamp': time.time(),
             'bot_status': 'error'
         }), 500
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Telegram webhook endpoint for 24/7 operation"""
+    try:
+        if not bot_instance:
+            return jsonify({'ok': False, 'error': 'Bot not ready'}), 503
+        
+        update = request.get_json()
+        if update:
+            # Process in background thread for fast response
+            thread = Thread(target=bot_instance.process_webhook_update, args=(update,))
+            thread.start()
+        
+        return jsonify({'ok': True}), 200
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 @app.route('/redeploy', methods=['POST'])
 def redeploy_bot():
@@ -122,7 +145,11 @@ def redeploy_bot():
         
         print(f"🔄 Redeploy triggered by user {user_id}")
         
-        redeploy_result = trigger_redeploy()
+        def delayed_restart():
+            time.sleep(2)
+            os._exit(0)
+        
+        Thread(target=delayed_restart, daemon=True).start()
         
         return jsonify({
             'status': 'success',
@@ -138,64 +165,73 @@ def redeploy_bot():
             'timestamp': time.time()
         }), 500
 
-def trigger_redeploy():
-    """Trigger a redeploy of the bot"""
-    try:
-        print("🚀 Initiating bot redeploy...")
-        print("✅ Redeploy signal sent - bot will restart shortly")
-        
-        def delayed_restart():
-            time.sleep(5)
-            os._exit(0)
-        
-        restart_thread = threading.Thread(target=delayed_restart, daemon=True)
-        restart_thread.start()
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Redeploy error: {e}")
-        return False
-
 @app.route('/')
 def home():
     """Root endpoint"""
     return jsonify({
         'service': 'Telegram Game Bot',
         'status': 'running',
-        'version': '1.0.0',
+        'version': '2.0.0',
+        'mode': 'webhook',
         'endpoints': {
             'health': '/health',
+            'webhook': '/webhook (POST)',
             'redeploy': '/redeploy (POST)',
             'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System', 'Redeploy System', '24/7 Operation', 'Referral System', 'Game Tokens', 'XAPK/APKS Support', 'Auto Backup']
         }
     })
 
-def run_health_server():
-    """Run the health check server with error handling"""
-    while True:
-        try:
-            port = int(os.environ.get('PORT', 8080))
-            print(f"🔄 Starting health server on port {port}")
-            app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-            break
-        except Exception as e:
-            print(f"❌ Health server error: {e}")
-            time.sleep(10)
-
-def start_health_check():
-    """Start health check server in background with restart capability"""
-    def health_wrapper():
-        while True:
-            try:
-                run_health_server()
-            except Exception as e:
-                print(f"❌ Health server crashed, restarting: {e}")
-                time.sleep(10)
+def set_webhook():
+    """Set Telegram webhook URL"""
+    if not BOT_TOKEN:
+        return False
     
-    t = Thread(target=health_wrapper, daemon=True)
+    # Auto-detect public URL
+    public_url = os.environ.get('CHOREO_URL') or os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('PUBLIC_URL')
+    
+    if not public_url:
+        print("⚠️ No public URL found, webhook not set")
+        return False
+    
+    webhook_url = f"{public_url}/webhook"
+    
+    try:
+        # Delete old webhook
+        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+        requests.post(delete_url, timeout=10)
+        
+        # Set new webhook
+        set_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
+        data = {"url": webhook_url}
+        response = requests.post(set_url, data=data, timeout=10)
+        result = response.json()
+        
+        if result.get('ok'):
+            print(f"✅ Webhook set successfully: {webhook_url}")
+            return True
+        else:
+            print(f"❌ Failed to set webhook: {result}")
+            return False
+    except Exception as e:
+        print(f"❌ Webhook error: {e}")
+        return False
+
+def run_webhook_server():
+    """Run the Flask webhook server"""
+    try:
+        port = int(os.environ.get('PORT', 8080))
+        print(f"🔄 Starting webhook server on port {port}")
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    except Exception as e:
+        print(f"❌ Server error: {e}")
+        time.sleep(10)
+        os._exit(1)
+
+def start_webhook_server():
+    """Start webhook server in background"""
+    t = Thread(target=run_webhook_server, daemon=True)
     t.start()
-    print("✅ Health check server started on port 8080")
+    print("✅ Webhook server started")
 
 # ==================== ENHANCED KEEP-ALIVE SERVICE ====================
 
@@ -1728,7 +1764,8 @@ class CrossPlatformBot:
         print("💎 Game Tokens can be used to purchase premium games")
         print("📹 Video Broadcast System Enabled")
         print("📝 Individual Game Request Replies with Media Support")
-        print("💾 GitHub Auto-Backup on Every Game Upload - ENABLED")
+        print("💾 GitHub Auto-Backup on Every Game Upload")
+        print("🌐 Webhook Mode - 24/7 Operation")
     
     def get_db_path(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'telegram_bot.db')
@@ -2003,6 +2040,15 @@ class CrossPlatformBot:
         empty = length - filled
         return "█" * filled + "░" * empty
     
+    # ==================== TRIGGER AUTO BACKUP ON GAME UPLOAD ====================
+    
+    def trigger_auto_backup(self, file_name=""):
+        """Trigger GitHub backup when a game is uploaded"""
+        if self.github_backup.is_enabled:
+            thread = Thread(target=self.github_backup.backup_database_to_github, args=(f"Auto-backup: Game '{file_name}' uploaded",))
+            thread.start()
+            print(f"💾 Auto-backup triggered for: {file_name}")
+    
     # ==================== MENU BUTTONS ====================
     
     def create_main_menu_buttons(self):
@@ -2098,8 +2144,6 @@ class CrossPlatformBot:
              {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})", "callback_data": "game_7z"}],
             [{"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})", "callback_data": "game_iso"}, 
              {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})", "callback_data": "game_apk"}],
-            [{"text": f"📦 XAPK ({len(self.games_cache.get('xapk', []))})", "callback_data": "game_xapk"}, 
-             {"text": f"📦 APKS ({len(self.games_cache.get('apks', []))})", "callback_data": "game_apks"}],
             [{"text": f"🎮 PSP ({len(self.games_cache.get('cso', [])) + len(self.games_cache.get('pbp', []))})", "callback_data": "game_psp"}, 
              {"text": f"📋 All ({stats['total_games']})", "callback_data": "game_all"}],
             [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
@@ -2724,7 +2768,7 @@ Choose reply type:"""
                     self.edit_message(chat_id, message_id, "❌ Please join the channel first!", self.create_channel_buttons())
                 return
             
-            # Game Categories - UPDATED with XAPK and APKS
+            # Game Categories
             elif data == "game_zip":
                 games = self.games_cache.get('zip', [])
                 text = self.format_games_list(games, "ZIP")
@@ -2743,16 +2787,6 @@ Choose reply type:"""
             elif data == "game_apk":
                 games = self.games_cache.get('apk', [])
                 text = self.format_games_list(games, "APK")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                return
-            elif data == "game_xapk":
-                games = self.games_cache.get('xapk', [])
-                text = self.format_games_list(games, "XAPK")
-                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                return
-            elif data == "game_apks":
-                games = self.games_cache.get('apks', [])
-                text = self.format_games_list(games, "APKS")
                 self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
                 return
             elif data == "game_psp":
@@ -2796,7 +2830,9 @@ Choose reply type:"""
                 self.edit_message(chat_id, message_id, "🔍 Scanning...", self.create_admin_buttons())
                 return
             elif data == "backup_menu" and self.is_admin(user_id):
-                self.edit_message(chat_id, message_id, "💾 Backup ready", self.create_admin_buttons())
+                info = self.github_backup.get_backup_info()
+                text = f"💾 Backup System\n\nEnabled: {info.get('enabled', False)}\nLast backup: {info.get('last_backup', 'Never')}\nAuto-backup on every game upload"
+                self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
                 return
             elif data == "redeploy_panel" and self.is_admin(user_id):
                 self.redeploy_system.show_redeploy_menu(user_id, chat_id, message_id)
@@ -2932,19 +2968,19 @@ Choose reply type:"""
         except:
             return False
     
-    # ==================== NEW: GAME UPLOAD HANDLER WITH AUTO-BACKUP ====================
+    # ==================== WEBHOOK UPDATE PROCESSING ====================
     
-    def handle_game_upload(self, message):
-        """Handle game file upload and trigger auto-backup"""
+    def process_webhook_update(self, update):
+        """Process incoming webhook updates"""
         try:
-            # Original game upload logic here
-            # After successful game save to database, trigger backup
-            if self.github_backup.is_enabled:
-                backup_thread = threading.Thread(target=self.github_backup.backup_database_to_github, args=(f"Auto-backup: New game uploaded at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",))
-                backup_thread.start()
-                print("💾 Auto-backup triggered after game upload")
+            if 'message' in update:
+                self.process_message(update['message'])
+            elif 'callback_query' in update:
+                self.handle_callback_query(update['callback_query'])
+            elif 'pre_checkout_query' in update:
+                self.answer_callback_query(update['pre_checkout_query']['id'])
         except Exception as e:
-            print(f"Error in game upload backup: {e}")
+            print(f"Process webhook update error: {e}")
     
     def process_message(self, message):
         try:
@@ -2997,62 +3033,65 @@ Please join @pspgamers5 and enter this code to verify."""
                     if text.startswith('/menu'):
                         self.robust_send_message(chat_id, "🏠 Main Menu", self.create_main_menu_buttons())
                         return True
+                    
+                    # Handle game request flow
+                    if user_id in self.request_sessions:
+                        session = self.request_sessions[user_id]
+                        if session.get('stage') == 'waiting_game_name':
+                            self.handle_game_request(user_id, chat_id, text)
+                            return True
+                        elif session.get('stage') == 'waiting_platform':
+                            self.complete_game_request(user_id, chat_id, text)
+                            return True
+                    
+                    # Handle broadcast button input
+                    if user_id in self.broadcast_system.broadcast_sessions:
+                        session = self.broadcast_system.broadcast_sessions[user_id]
+                        if session.get('stage') == 'waiting_buttons':
+                            self.broadcast_system.process_buttons_input(user_id, chat_id, text)
+                            return True
+                        elif session.get('stage') == 'waiting_text':
+                            session['message'] = text
+                            session['stage'] = 'preview'
+                            self.broadcast_system.show_preview(user_id, chat_id)
+                            return True
+                    
+                    # Handle media reply text
+                    if user_id in self.media_reply_sessions:
+                        session = self.media_reply_sessions[user_id]
+                        if session.get('stage') == 'waiting_text':
+                            request = self.game_request_system.get_request_by_id(session['request_id'])
+                            if request:
+                                self.game_request_system.send_reply_to_user(session['user_id'], request, text)
+                                self.robust_send_message(chat_id, "✅ Reply sent to user!")
+                            del self.media_reply_sessions[user_id]
+                            return True
                 
                 if self.is_user_verified(user_id):
                     if self.is_user_completed(user_id):
                         pass
             
-            # NEW: Check for document uploads (game files)
+            # Handle document uploads (game files) - TRIGGER AUTO BACKUP
             elif 'document' in message:
-                self.handle_game_upload(message)
+                file_name = message['document'].get('file_name', 'Unknown')
+                print(f"📁 Game file uploaded: {file_name}")
+                # Trigger GitHub backup after game upload
+                self.trigger_auto_backup(file_name)
             
             return False
         except Exception as e:
             print(f"Process message error: {e}")
             return False
-    
-    def get_updates(self, offset=None):
-        try:
-            url = self.base_url + "getUpdates"
-            params = {"timeout": 100, "offset": offset}
-            response = requests.get(url, params=params, timeout=110)
-            data = response.json()
-            return data.get('result', []) if data.get('ok') else []
-        except:
-            return []
-    
-    def run(self):
-        print("🤖 Bot is running with enhanced features...")
-        print("✅ Video Broadcast System Active")
-        print("✅ Referral System with Game Tokens Active")
-        print("✅ Individual Game Request Replies with Media Support")
-        print("✅ XAPK & APKS File Support Active")
-        print("✅ GitHub Auto-Backup on Every Game Upload Active")
-        
-        offset = 0
-        while True:
-            try:
-                updates = self.get_updates(offset)
-                for update in updates:
-                    offset = update['update_id'] + 1
-                    if 'message' in update:
-                        self.process_message(update['message'])
-                    elif 'callback_query' in update:
-                        self.handle_callback_query(update['callback_query'])
-                    elif 'pre_checkout_query' in update:
-                        self.answer_callback_query(update['pre_checkout_query']['id'])
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"Run error: {e}")
-                time.sleep(5)
 
 # ==================== MAIN ENTRY POINT ====================
 
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Telegram Bot with All Features...")
+    print("🚀 Starting Enhanced Telegram Bot with Webhook Mode...")
     print("💾 GitHub Auto-Backup will trigger on every game upload")
+    print("🌐 Webhook mode enabled for 24/7 operation")
     
-    start_health_check()
+    # Start webhook server instead of health check server
+    start_webhook_server()
     time.sleep(2)
     
     if BOT_TOKEN:
@@ -3061,8 +3100,21 @@ if __name__ == "__main__":
             response = requests.get(url, timeout=10)
             if response.json().get('ok'):
                 print("✅ Bot token is valid")
-                bot = CrossPlatformBot(BOT_TOKEN)
-                bot.run()
+                
+                # Set webhook
+                set_webhook()
+                
+                # Initialize bot
+                bot_instance = CrossPlatformBot(BOT_TOKEN)
+                
+                # Start keep-alive service
+                keep_alive = EnhancedKeepAliveService()
+                keep_alive.start()
+                
+                # Keep main thread alive
+                while True:
+                    time.sleep(60)
+                    print(f"💚 Bot alive - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             else:
                 print("❌ Invalid bot token")
         except Exception as e:
