@@ -2614,7 +2614,7 @@ Choose reply type:"""
             elif data.startswith("buy_with_tokens_"):
                 game_id = int(data.replace("buy_with_tokens_", ""))
                 self.purchase_with_tokens(user_id, chat_id, game_id)
-                return            elif data.startswith("buy_with_stars_"):
+            elif data.startswith("buy_with_stars_"):
                 game_id = int(data.replace("buy_with_stars_", ""))
                 self.purchase_with_stars(user_id, chat_id, game_id)
                 return
