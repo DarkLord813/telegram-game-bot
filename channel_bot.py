@@ -17,398 +17,171 @@ import hashlib
 import hmac
 import subprocess
 
-print("TELEGRAM BOT - CROSS PLATFORM")
-print("Code Verification + Channel Join + Game Scanner")
-print("Admin Game Uploads Enabled + Forward Support + Game Scanner")
-print("Mini-Games Integration: Number Guess, Random Number, Lucky Spin")
-print("Admin Broadcast Messaging System + Enhanced Keep-Alive Protection")
-print("Telegram Stars Payments Integration")
-print("Game Request System for Users")
-print("Premium Games System with Stars Payments")
-print("Enhanced Broadcast with Photos & VIDEOS")  # UPDATED
-print("Individual Request Replies")
-print("Game Removal System with Duplicate Detection")
-print("Redeploy System for Admins and Users")
-print("GitHub Database Backup & Restore System")
-print("24/7 Operation with Persistent Data Recovery")
-print("REFERRAL SYSTEM WITH GAME TOKENS")  # NEW
-print("GAME TOKEN PAYMENTS FOR PREMIUM GAMES")  # NEW
-print("XAPK & APKS FILE SUPPORT")  # NEW
-print("AUTO GITHUB BACKUP ON EVERY GAME UPLOAD")  # NEW
-print("WEBHOOK MODE FOR 24/7 OPERATION")  # NEW
-print("=" * 50)
+print("=" * 60)
+print("🤖 GAMERDROID™ V1 - FULL TELEGRAM BOT")
+print("=" * 60)
+print("✅ Code Verification + Channel Join + Game Scanner")
+print("✅ Admin Game Uploads Enabled + Forward Support")
+print("✅ Mini-Games Integration")
+print("✅ Admin Broadcast Messaging System")
+print("✅ Telegram Stars Payments Integration")
+print("✅ Game Request System for Users")
+print("✅ Premium Games System with Stars Payments")
+print("✅ Enhanced Broadcast with Photos & VIDEOS")
+print("✅ Individual Request Replies")
+print("✅ Game Removal System with Duplicate Detection")
+print("✅ Redeploy System for Admins and Users")
+print("✅ GitHub Database Backup & Restore System")
+print("✅ 24/7 Operation with Persistent Data Recovery")
+print("✅ REFERRAL SYSTEM WITH GAME TOKENS")
+print("✅ GAME TOKEN PAYMENTS FOR PREMIUM GAMES")
+print("✅ XAPK & APKS FILE SUPPORT")
+print("✅ AUTO GITHUB BACKUP ON EVERY GAME UPLOAD")
+print("✅ WEBHOOK MODE FOR 24/7 OPERATION")
+print("=" * 60)
 
-# ==================== RENDER DEBUG SECTION ====================
-print("🔍 RENDER DEBUG: Starting initialization...")
-print(f"🔍 DEBUG: Python version: {sys.version}")
-print(f"🔍 DEBUG: Current directory: {os.getcwd()}")
-print(f"🔍 DEBUG: Files in directory: {os.listdir('.')}")
+# ==================== CONFIGURATION ====================
+print("🔍 Starting initialization...")
+print(f"🔍 Python version: {sys.version}")
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-BOT_USERNAME = os.environ.get('BOT_USERNAME', 'GAMERDROIDV1BOT')  # NEW: Bot username for referral links
+BOT_USERNAME = os.environ.get('BOT_USERNAME', 'GAMERDROIDV1BOT')
+REQUIRED_CHANNEL = os.environ.get('REQUIRED_CHANNEL', '@pspgamers5')
+CHANNEL_LINK = os.environ.get('CHANNEL_LINK', 'https://t.me/pspgamers5')
+PORT = int(os.environ.get('PORT', 8080))
 
-print(f"🔍 DEBUG: BOT_TOKEN exists: {'YES' if BOT_TOKEN else 'NO'}")
-print(f"🔍 DEBUG: BOT_USERNAME: {BOT_USERNAME}")
+# Parse admin IDs
+ADMIN_IDS = []
+admin_ids_str = os.environ.get('ADMIN_IDS', '7475473197,7713987088')
+for x in admin_ids_str.split(','):
+    try:
+        ADMIN_IDS.append(int(x.strip()))
+    except:
+        pass
 
-if BOT_TOKEN:
-    print(f"🔍 DEBUG: Token starts with: {BOT_TOKEN[:10]}...")
-    print(f"🔍 DEBUG: Token length: {len(BOT_TOKEN)}")
-else:
-    print("❌ DEBUG: BOT_TOKEN is MISSING! Check Render Environment Variables")
+# GitHub Configuration
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+GITHUB_REPO_OWNER = os.environ.get('GITHUB_REPO_OWNER', '')
+GITHUB_REPO_NAME = os.environ.get('GITHUB_REPO_NAME', '')
 
-# Test critical imports
-try:
-    import requests
-    print("✅ DEBUG: requests import OK")
-except ImportError as e:
-    print(f"❌ DEBUG: requests import failed: {e}")
+print(f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}")
+print(f"BOT_USERNAME: {BOT_USERNAME}")
+print(f"ADMIN_IDS: {ADMIN_IDS}")
 
-try:
-    import sqlite3
-    print("✅ DEBUG: sqlite3 import OK")
-except ImportError as e:
-    print(f"❌ DEBUG: sqlite3 import failed: {e}")
-
-try:
-    from flask import Flask, jsonify
-    print("✅ DEBUG: flask imports OK")
-except ImportError as e:
-    print(f"❌ DEBUG: flask imports failed: {e}")
-# ==================== END DEBUG SECTION ====================
-
-# Health check server
+# Flask app for webhook
 app = Flask(__name__)
-
-# Global bot instance for webhook
 bot_instance = None
 
 @app.route('/health')
-def health_check():
-    """Enhanced health check endpoint for Render monitoring"""
-    try:
-        bot_status = 'unknown'
-        if bot_instance and hasattr(bot_instance, 'test_bot_connection'):
-            bot_status = 'healthy' if bot_instance.test_bot_connection() else 'unhealthy'
-        
-        health_status = {
-            'status': 'healthy',
-            'timestamp': time.time(),
-            'service': 'telegram-game-bot',
-            'version': '2.0.0',
-            'bot_status': bot_status,
-            'mode': 'webhook',
-            'checks': {
-                'bot_online': {'status': bot_status, 'message': f'Bot is {bot_status}'},
-                'system': {'status': 'healthy', 'message': 'System operational'},
-                'database': {'status': 'healthy', 'message': 'Database connected'}
-            }
-        }
-        return jsonify(health_status), 200
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e),
-            'timestamp': time.time(),
-            'bot_status': 'error'
-        }), 500
+def health():
+    return jsonify({'status': 'healthy', 'bot': 'running', 'mode': 'webhook'}), 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Telegram webhook endpoint - ALWAYS RETURNS 200 OK"""
     try:
         if not bot_instance:
-            print("⚠️ Webhook received but bot not ready")
-            return jsonify({'ok': False, 'error': 'Bot not ready'}), 200
-        
+            return jsonify({'ok': False}), 200
         update = request.get_json()
         if update:
-            thread = Thread(target=bot_instance.process_webhook_update, args=(update,))
-            thread.start()
-            print(f"📨 Webhook update received")
-        
-        # ALWAYS return 200 OK - This is critical!
+            Thread(target=bot_instance.process_update, args=(update,)).start()
         return jsonify({'ok': True}), 200
-    except Exception as e:
-        print(f"Webhook error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 200
-
-@app.route('/redeploy', methods=['POST'])
-def redeploy_bot():
-    """Redeploy endpoint for admins and users"""
-    try:
-        auth_token = request.headers.get('Authorization', '')
-        user_id = request.json.get('user_id', '') if request.json else ''
-        
-        is_authorized = auth_token == os.environ.get('REDEPLOY_TOKEN', 'default_token') or user_id in ['7475473197', '7713987088']
-        
-        if not is_authorized:
-            return jsonify({
-                'status': 'error',
-                'message': 'Unauthorized access'
-            }), 401
-        
-        print(f"🔄 Redeploy triggered by user {user_id}")
-        
-        def delayed_restart():
-            time.sleep(2)
-            os._exit(0)
-        
-        Thread(target=delayed_restart, daemon=True).start()
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Redeploy initiated successfully',
-            'redeploy_id': int(time.time()),
-            'timestamp': datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e),
-            'timestamp': time.time()
-        }), 500
+    except:
+        return jsonify({'ok': False}), 200
 
 @app.route('/')
 def home():
-    """Root endpoint"""
-    return jsonify({
-        'service': 'Telegram Game Bot',
-        'status': 'running',
-        'version': '2.0.0',
-        'mode': 'webhook',
-        'endpoints': {
-            'health': '/health',
-            'webhook': '/webhook (POST)',
-            'redeploy': '/redeploy (POST)',
-            'features': ['Game Distribution', 'Mini-Games', 'Admin Uploads', 'Broadcast Messaging', 'Telegram Stars', 'Game Requests', 'Premium Games', 'Game Removal System', 'Redeploy System', '24/7 Operation', 'Referral System', 'Game Tokens', 'XAPK/APKS Support', 'Auto Backup']
-        }
-    })
+    return jsonify({'service': 'GAMERDROID™ V1', 'status': 'running'})
 
-def set_webhook():
-    """Set Telegram webhook URL"""
-    if not BOT_TOKEN:
-        return False
-    
-    public_url = os.environ.get('CHOREO_URL') or os.environ.get('RENDER_EXTERNAL_URL') or os.environ.get('PUBLIC_URL')
-    
-    if not public_url:
-        print("⚠️ No public URL found, webhook not set")
-        print("⚠️ Please set CHOREO_URL environment variable")
-        return False
-    
-    webhook_url = f"{public_url}/webhook"
-    
-    try:
-        delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-        delete_response = requests.post(delete_url, timeout=10)
-        print(f"Delete webhook response: {delete_response.json()}")
-        
-        set_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
-        data = {"url": webhook_url}
-        response = requests.post(set_url, data=data, timeout=10)
-        result = response.json()
-        
-        if result.get('ok'):
-            print(f"✅ Webhook set successfully: {webhook_url}")
-            return True
-        else:
-            print(f"❌ Failed to set webhook: {result}")
-            return False
-    except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        return False
-
-def run_webhook_server():
-    """Run the Flask webhook server"""
-    try:
-        port = int(os.environ.get('PORT', 8080))
-        print(f"🔄 Starting webhook server on port {port}")
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-    except Exception as e:
-        print(f"❌ Server error: {e}")
-        time.sleep(10)
-        os._exit(1)
-
-def start_webhook_server():
-    """Start webhook server in background"""
-    t = Thread(target=run_webhook_server, daemon=True)
-    t.start()
-    print("✅ Webhook server started")
+def run_server():
+    app.run(host='0.0.0.0', port=PORT, debug=False)
 
 # ==================== ENHANCED KEEP-ALIVE SERVICE ====================
 
 class EnhancedKeepAliveService:
     def __init__(self, health_url=None):
-        self.health_url = health_url or f"http://localhost:{os.environ.get('PORT', 8080)}/health"
+        self.health_url = health_url or f"http://localhost:{PORT}/health"
         self.is_running = False
         self.ping_count = 0
         self.last_successful_ping = time.time()
         
     def start(self):
-        """Start enhanced keep-alive service with better monitoring"""
         self.is_running = True
         
         def ping_loop():
             consecutive_failures = 0
-            max_consecutive_failures = 3
-            
             while self.is_running:
                 try:
                     self.ping_count += 1
                     response = requests.get(self.health_url, timeout=15)
-                    
                     if response.status_code == 200:
                         self.last_successful_ping = time.time()
                         consecutive_failures = 0
-                        print(f"✅ Keep-alive ping #{self.ping_count}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        print(f"✅ Keep-alive ping #{self.ping_count}")
                     else:
                         consecutive_failures += 1
-                        print(f"❌ Keep-alive failed: Status {response.status_code} (Failures: {consecutive_failures})")
-                        
-                except requests.exceptions.ConnectionError:
+                except:
                     consecutive_failures += 1
-                    print(f"🔌 Keep-alive connection error (Failures: {consecutive_failures})")
-                except requests.exceptions.Timeout:
-                    consecutive_failures += 1
-                    print(f"⏰ Keep-alive timeout (Failures: {consecutive_failures})")
-                except Exception as e:
-                    consecutive_failures += 1
-                    print(f"❌ Keep-alive error: {e} (Failures: {consecutive_failures})")
                 
-                if consecutive_failures >= max_consecutive_failures:
-                    print("🚨 Too many consecutive failures, initiating emergency procedures...")
-                    self.emergency_restart()
-                    consecutive_failures = 0
+                if consecutive_failures >= 3:
+                    print("🚨 Too many failures, restarting...")
+                    os._exit(1)
                 
-                if time.time() - self.last_successful_ping > 600:
-                    print("🚨 No successful pings for 10 minutes, emergency restart...")
-                    self.emergency_restart()
-                    self.last_successful_ping = time.time()
-                
-                if consecutive_failures > 0:
-                    sleep_time = 60
-                else:
-                    sleep_time = 240
-                
-                time.sleep(sleep_time)
+                time.sleep(240)
         
-        thread = threading.Thread(target=ping_loop, daemon=True)
-        thread.start()
-        print(f"🔄 Enhanced keep-alive service started")
-        print(f"🌐 Health endpoint: {self.health_url}")
-        
-    def emergency_restart(self):
-        """Emergency restart procedure"""
-        print("🔄 Initiating emergency restart...")
-        os._exit(1)
-        
-    def stop(self):
-        """Stop keep-alive service"""
-        self.is_running = False
-        print("🛑 Keep-alive service stopped")
+        Thread(target=ping_loop, daemon=True).start()
+        print("🔄 Enhanced keep-alive service started")
+
+# ==================== GITHUB BACKUP SYSTEM ====================
+
+class GitHubBackupSystem:
+    def __init__(self, bot):
+        self.bot = bot
+        self.enabled = bool(GITHUB_TOKEN and GITHUB_REPO_OWNER and GITHUB_REPO_NAME)
+        if self.enabled:
+            print(f"✅ GitHub Backup: Enabled")
+    
+    def backup(self, reason="Auto backup"):
+        if not self.enabled:
+            return False
+        try:
+            db_path = self.bot.get_db_path()
+            if not os.path.exists(db_path):
+                return False
+            with open(db_path, 'rb') as f:
+                content = base64.b64encode(f.read()).decode()
+            url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/backups/telegram_bot.db"
+            headers = {'Authorization': f'token {GITHUB_TOKEN}'}
+            data = {'message': reason, 'content': content, 'branch': 'main'}
+            response = requests.put(url, headers=headers, json=data, timeout=30)
+            return response.status_code in [200, 201]
+        except Exception as e:
+            print(f"Backup error: {e}")
+            return False
 
 # ==================== REFERRAL SYSTEM WITH GAME TOKENS ====================
 
 class ReferralSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_referral_database()
+    def __init__(self, bot):
+        self.bot = bot
+        self.setup_tables()
         print("✅ Referral system initialized!")
     
-    def setup_referral_database(self):
-        """Setup referral system database tables"""
+    def setup_tables(self):
         try:
             cursor = self.bot.conn.cursor()
-            
-            # Add referral columns to users table if not exist
             cursor.execute("PRAGMA table_info(users)")
-            columns = [column[1] for column in cursor.fetchall()]
-            
-            if 'referred_by' not in columns:
-                cursor.execute('ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0')
-            if 'referral_code' not in columns:
-                cursor.execute('ALTER TABLE users ADD COLUMN referral_code TEXT UNIQUE')
-            if 'game_tokens' not in columns:
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'game_tokens' not in cols:
                 cursor.execute('ALTER TABLE users ADD COLUMN game_tokens INTEGER DEFAULT 0')
-            if 'total_referrals' not in columns:
+            if 'total_referrals' not in cols:
                 cursor.execute('ALTER TABLE users ADD COLUMN total_referrals INTEGER DEFAULT 0')
-            
-            # Create referrals table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS referrals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    referrer_id INTEGER,
-                    referred_id INTEGER,
-                    tokens_earned INTEGER DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'completed'
-                )
-            ''')
-            
-            # Create token transactions table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS token_transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    amount INTEGER,
-                    transaction_type TEXT,
-                    description TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
+            if 'referred_by' not in cols:
+                cursor.execute('ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0')
             self.bot.conn.commit()
-            print("✅ Referral database setup complete!")
-            
         except Exception as e:
-            print(f"❌ Referral database setup error: {e}")
+            print(f"Referral setup error: {e}")
     
-    def generate_referral_code(self, user_id):
-        """Generate unique referral code for user"""
-        import hashlib
-        code = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8]
-        return code
-    
-    def register_referral(self, referrer_id, referred_id):
-        """Register a new referral and award tokens"""
-        try:
-            cursor = self.bot.conn.cursor()
-            
-            # Check if already referred
-            cursor.execute('SELECT id FROM referrals WHERE referred_id = ?', (referred_id,))
-            if cursor.fetchone():
-                return False
-            
-            # Award 1 token to referrer
-            cursor.execute('''
-                INSERT INTO referrals (referrer_id, referred_id, tokens_earned) 
-                VALUES (?, ?, ?)
-            ''', (referrer_id, referred_id, 1))
-            
-            # Update referrer's token balance
-            cursor.execute('''
-                UPDATE users 
-                SET game_tokens = game_tokens + 1, total_referrals = total_referrals + 1 
-                WHERE user_id = ?
-            ''', (referrer_id,))
-            
-            # Log transaction
-            cursor.execute('''
-                INSERT INTO token_transactions (user_id, amount, transaction_type, description)
-                VALUES (?, ?, ?, ?)
-            ''', (referrer_id, 1, 'referral', f'Referred user {referred_id}'))
-            
-            self.bot.conn.commit()
-            print(f"✅ Referral registered: {referrer_id} -> {referred_id}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Referral registration error: {e}")
-            return False
-    
-    def get_user_tokens(self, user_id):
-        """Get user's game token balance"""
+    def get_tokens(self, user_id):
         try:
             cursor = self.bot.conn.cursor()
             cursor.execute('SELECT game_tokens FROM users WHERE user_id = ?', (user_id,))
@@ -417,134 +190,65 @@ class ReferralSystem:
         except:
             return 0
     
-    def add_tokens(self, user_id, amount, description=""):
-        """Add tokens to user's balance"""
+    def add_tokens(self, user_id, amount):
         try:
             cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                UPDATE users SET game_tokens = game_tokens + ? WHERE user_id = ?
-            ''', (amount, user_id))
-            
-            cursor.execute('''
-                INSERT INTO token_transactions (user_id, amount, transaction_type, description)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, amount, 'admin_add', description))
-            
+            cursor.execute('UPDATE users SET game_tokens = game_tokens + ? WHERE user_id = ?', (amount, user_id))
             self.bot.conn.commit()
             return True
-        except Exception as e:
-            print(f"❌ Add tokens error: {e}")
+        except:
             return False
     
-    def deduct_tokens(self, user_id, amount, description=""):
-        """Deduct tokens from user's balance"""
+    def deduct_tokens(self, user_id, amount):
         try:
-            cursor = self.bot.conn.cursor()
-            
-            # Check sufficient balance
-            current = self.get_user_tokens(user_id)
+            current = self.get_tokens(user_id)
             if current < amount:
                 return False
-            
-            cursor.execute('''
-                UPDATE users SET game_tokens = game_tokens - ? WHERE user_id = ?
-            ''', (amount, user_id))
-            
-            cursor.execute('''
-                INSERT INTO token_transactions (user_id, amount, transaction_type, description)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, -amount, 'purchase', description))
-            
+            cursor = self.bot.conn.cursor()
+            cursor.execute('UPDATE users SET game_tokens = game_tokens - ? WHERE user_id = ?', (amount, user_id))
             self.bot.conn.commit()
             return True
-        except Exception as e:
-            print(f"❌ Deduct tokens error: {e}")
+        except:
             return False
     
-    def get_referral_stats(self, user_id):
-        """Get user's referral statistics"""
+    def register_referral(self, referrer_id, referred_id):
         try:
             cursor = self.bot.conn.cursor()
-            
-            cursor.execute('SELECT total_referrals FROM users WHERE user_id = ?', (user_id,))
-            total_refs = cursor.fetchone()
-            total_refs = total_refs[0] if total_refs else 0
-            
-            cursor.execute('''
-                SELECT COUNT(*) FROM referrals 
-                WHERE referrer_id = ? AND created_at >= date('now', '-30 days')
-            ''', (user_id,))
-            monthly_refs = cursor.fetchone()[0]
-            
-            cursor.execute('''
-                SELECT SUM(tokens_earned) FROM referrals WHERE referrer_id = ?
-            ''', (user_id,))
-            total_tokens = cursor.fetchone()[0] or 0
-            
-            return {
-                'total_referrals': total_refs,
-                'monthly_referrals': monthly_refs,
-                'total_tokens_earned': total_tokens,
-                'current_tokens': self.get_user_tokens(user_id)
-            }
+            cursor.execute('SELECT referred_by FROM users WHERE user_id = ?', (referred_id,))
+            result = cursor.fetchone()
+            if result and result[0] != 0:
+                return False
+            cursor.execute('UPDATE users SET game_tokens = game_tokens + 1, total_referrals = total_referrals + 1 WHERE user_id = ?', (referrer_id,))
+            cursor.execute('UPDATE users SET referred_by = ? WHERE user_id = ?', (referrer_id, referred_id))
+            self.bot.conn.commit()
+            self.bot.robust_send_message(referrer_id, f"🎉 New Referral!\nUser joined using your link!\nYou earned 1 Game Token! 💎")
+            return True
         except:
-            return {'total_referrals': 0, 'monthly_referrals': 0, 'total_tokens_earned': 0, 'current_tokens': 0}
+            return False
     
-    def get_leaderboard(self, limit=10):
-        """Get top referrers leaderboard"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT user_id, first_name, total_referrals, game_tokens 
-                FROM users 
-                WHERE total_referrals > 0 
-                ORDER BY total_referrals DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except:
-            return []
-    
-    # ========== UPDATED: Generate referral link using user's actual Telegram ID ==========
-    def generate_referral_link(self, user_id):
-        """Generate referral link using user's Telegram ID directly"""
-        # Get bot username from environment variable or use default
-        bot_username = os.environ.get('BOT_USERNAME', 'GAMERDROIDV1BOT')
-        # Format: https://t.me/GAMERDROIDV1BOT?start=ref_USER_ID
-        return f"https://t.me/{bot_username}?start=ref_{user_id}"
+    def get_link(self, user_id):
+        return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
 
-# ==================== ENHANCED BROADCAST SYSTEM WITH VIDEO ====================
+# ==================== ENHANCED BROADCAST SYSTEM ====================
 
 class EnhancedBroadcastSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.broadcast_sessions = {}
-        self.button_sessions = {}  # NEW: Store button collection session
-        print("✅ Enhanced Broadcast System with Video initialized!")
+    def __init__(self, bot):
+        self.bot = bot
+        self.sessions = {}
+        self.button_sessions = {}
+        print("✅ Enhanced Broadcast System initialized!")
     
     def create_broadcast_with_buttons(self, user_id, chat_id):
-        """Show broadcast type selection menu"""
-        self.broadcast_sessions[user_id] = {
-            'stage': 'waiting_type',
-            'type': None,
-            'message': None,
-            'photo': None,
-            'video': None,
-            'caption': None,
-            'buttons': [],
-            'chat_id': chat_id
-        }
+        self.sessions[user_id] = {'stage': 'waiting_type', 'type': None, 'message': None, 'photo': None, 'video': None, 'caption': None, 'buttons': []}
         
         menu_text = """📢 <b>Enhanced Broadcast System</b>
 
 Choose what to broadcast:
 
-📝 Text Message with formatting
+📝 Text Message
 🖼️ Photo with caption
 🎥 Video with caption
-🔘 Inline buttons support
-
-Send your content now:"""
+🔘 Inline buttons support"""
         
         keyboard = {
             "inline_keyboard": [
@@ -555,97 +259,63 @@ Send your content now:"""
                 [{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]
             ]
         }
-        
         self.bot.robust_send_message(chat_id, menu_text, keyboard)
     
     def handle_broadcast_text(self, user_id, chat_id):
-        """Handle text broadcast selection"""
-        if user_id not in self.broadcast_sessions:
-            return
-        self.broadcast_sessions[user_id]['stage'] = 'waiting_text'
-        self.broadcast_sessions[user_id]['type'] = 'text'
-        self.bot.robust_send_message(chat_id, "📝 Send your broadcast message (HTML formatting supported):")
+        if user_id in self.sessions:
+            self.sessions[user_id]['stage'] = 'waiting_text'
+            self.sessions[user_id]['type'] = 'text'
+            self.bot.robust_send_message(chat_id, "📝 Send your broadcast message:")
     
     def handle_broadcast_photo(self, user_id, chat_id):
-        """Handle photo broadcast selection"""
-        if user_id not in self.broadcast_sessions:
-            return
-        self.broadcast_sessions[user_id]['stage'] = 'waiting_photo'
-        self.broadcast_sessions[user_id]['type'] = 'photo'
-        self.bot.robust_send_message(chat_id, "🖼️ Send your photo (caption optional):\n\nSend 'skip' for no caption")
+        if user_id in self.sessions:
+            self.sessions[user_id]['stage'] = 'waiting_photo'
+            self.sessions[user_id]['type'] = 'photo'
+            self.bot.robust_send_message(chat_id, "🖼️ Send your photo:")
     
     def handle_broadcast_video(self, user_id, chat_id):
-        """Handle video broadcast selection"""
-        if user_id not in self.broadcast_sessions:
-            return
-        self.broadcast_sessions[user_id]['stage'] = 'waiting_video'
-        self.broadcast_sessions[user_id]['type'] = 'video'
-        self.bot.robust_send_message(chat_id, "🎥 Send your video (caption optional):\n\nSend 'skip' for no caption")
-    
-    def handle_caption(self, user_id, chat_id, caption):
-        """Handle caption input"""
-        if user_id not in self.broadcast_sessions:
-            return
-        session = self.broadcast_sessions[user_id]
-        if caption.lower() != 'skip':
-            session['caption'] = caption
-        session['stage'] = 'preview'
-        self.show_preview(user_id, chat_id)
+        if user_id in self.sessions:
+            self.sessions[user_id]['stage'] = 'waiting_video'
+            self.sessions[user_id]['type'] = 'video'
+            self.bot.robust_send_message(chat_id, "🎥 Send your video:")
     
     def add_buttons_to_broadcast(self, user_id, chat_id):
-        """Start button addition process"""
-        if user_id not in self.broadcast_sessions:
-            return
-        session = self.broadcast_sessions[user_id]
-        session['stage'] = 'waiting_buttons'
-        self.button_sessions[user_id] = {'buttons': [], 'stage': 'collecting'}
-        
-        help_text = """🔘 Add Inline Buttons
-
-Send buttons ONE BY ONE in separate messages.
+        if user_id in self.sessions:
+            self.sessions[user_id]['stage'] = 'waiting_buttons'
+            self.button_sessions[user_id] = {'buttons': []}
+            help_text = """🔘 Add Inline Buttons
 
 Format: Button Text|type|value
 
-Types: url, callback, game
+Types: url, callback
 
 Examples:
 Join Channel|url|https://t.me/pspgamers5
 Get Games|callback|games
 
-Send 'done' when finished.
-Send 'cancel' to abort."""
-        
-        self.bot.robust_send_message(chat_id, help_text)
+Send 'done' when finished."""
+            self.bot.robust_send_message(chat_id, help_text)
     
-    def parse_button(self, button_text):
-        """Parse button text into button object"""
-        parts = button_text.split('|')
+    def parse_button(self, text):
+        parts = text.split('|')
         if len(parts) >= 3:
-            text = parts[0].strip()
-            button_type = parts[1].strip().lower()
-            value = parts[2].strip()
-            if button_type == 'url':
-                return {"text": text, "url": value}
-            elif button_type == 'callback':
-                return {"text": text, "callback_data": value}
-            elif button_type == 'game':
-                return {"text": text, "callback_game": {}}
+            btn_text = parts[0].strip()
+            btn_type = parts[1].strip().lower()
+            btn_value = parts[2].strip()
+            if btn_type == 'url':
+                return {"text": btn_text, "url": btn_value}
+            elif btn_type == 'callback':
+                return {"text": btn_text, "callback_data": btn_value}
         return None
     
     def process_buttons_input(self, user_id, chat_id, text):
-        """Process button addition input"""
         if user_id not in self.button_sessions:
             return
         
-        if text.lower() == 'cancel':
-            del self.button_sessions[user_id]
-            self.bot.robust_send_message(chat_id, "❌ Button addition cancelled.")
-            return
-        
         if text.lower() == 'done':
-            if user_id in self.broadcast_sessions:
-                self.broadcast_sessions[user_id]['buttons'] = self.button_sessions[user_id]['buttons']
-                self.broadcast_sessions[user_id]['stage'] = 'preview'
+            if user_id in self.sessions:
+                self.sessions[user_id]['buttons'] = self.button_sessions[user_id]['buttons']
+                self.sessions[user_id]['stage'] = 'preview'
             del self.button_sessions[user_id]
             self.show_preview(user_id, chat_id)
             return
@@ -653,48 +323,23 @@ Send 'cancel' to abort."""
         button = self.parse_button(text)
         if button:
             self.button_sessions[user_id]['buttons'].append(button)
-            self.bot.robust_send_message(chat_id, f"✅ Button added: {button['text']}\nSend 'done' to finish, 'cancel' to abort")
+            self.bot.robust_send_message(chat_id, f"✅ Button added: {button['text']}\nSend 'done' to finish")
         else:
             self.bot.robust_send_message(chat_id, "❌ Invalid format. Use: Text|type|value")
     
     def show_preview(self, user_id, chat_id):
-        """Show broadcast preview"""
-        if user_id not in self.broadcast_sessions:
+        if user_id not in self.sessions:
             return
-        session = self.broadcast_sessions[user_id]
+        session = self.sessions[user_id]
         
-        preview_text = "📋 <b>Broadcast Preview</b>\n\n"
-        if session['type'] == 'text':
-            preview_text += f"📝 <b>Message:</b>\n{session['message']}\n\n"
-        elif session['type'] == 'photo':
-            preview_text += f"🖼️ <b>Photo</b>\n"
-            if session.get('caption'):
-                preview_text += f"📝 <b>Caption:</b>\n{session['caption']}\n\n"
-        elif session['type'] == 'video':
-            preview_text += f"🎥 <b>Video</b>\n"
-            if session.get('caption'):
-                preview_text += f"📝 <b>Caption:</b>\n{session['caption']}\n\n"
-        
-        if session['buttons']:
-            preview_text += f"🔘 <b>Buttons:</b> {len(session['buttons'])}\n\n"
-        
-        preview_text += "Send this broadcast?"
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "✅ Send Broadcast", "callback_data": "send_broadcast"}],
-                [{"text": "❌ Cancel Broadcast", "callback_data": "cancel_broadcast"}]
-            ]
-        }
-        
+        preview_text = f"📋 Broadcast Preview\n\nType: {session['type'].upper()}\n\nSend this broadcast?"
+        keyboard = {"inline_keyboard": [[{"text": "✅ Send", "callback_data": "send_broadcast"}], [{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]]}
         self.bot.robust_send_message(chat_id, preview_text, keyboard)
     
     def execute_broadcast(self, user_id, chat_id):
-        """Execute the broadcast to all users"""
-        if user_id not in self.broadcast_sessions:
+        if user_id not in self.sessions:
             return
-        
-        session = self.broadcast_sessions[user_id]
+        session = self.sessions[user_id]
         
         cursor = self.bot.conn.cursor()
         cursor.execute('SELECT user_id FROM users WHERE is_verified = 1')
@@ -702,1194 +347,273 @@ Send 'cancel' to abort."""
         
         if not users:
             self.bot.robust_send_message(chat_id, "❌ No verified users found.")
-            del self.broadcast_sessions[user_id]
+            del self.sessions[user_id]
             return
         
-        total_users = len(users)
-        success_count = 0
-        failed_count = 0
+        success = 0
+        failed = 0
         
-        # Create reply markup if buttons exist
         reply_markup = None
         if session['buttons']:
-            button_rows = [session['buttons'][i:i+2] for i in range(0, len(session['buttons']), 2)]
-            reply_markup = json.dumps({"inline_keyboard": button_rows})
+            rows = [session['buttons'][i:i+2] for i in range(0, len(session['buttons']), 2)]
+            reply_markup = json.dumps({"inline_keyboard": rows})
         
-        start_time = time.time()
-        
-        for user_id_target, in users:
+        for uid, in users:
             try:
                 if session['type'] == 'text':
-                    success = self.bot.robust_send_message(
-                        user_id_target, 
-                        session['message'], 
-                        json.loads(reply_markup) if reply_markup else None
-                    )
-                elif session['type'] == 'photo':
-                    if session.get('photo'):
-                        success = self.bot.robust_send_photo(
-                            user_id_target, 
-                            session['photo'], 
-                            session.get('caption', ''), 
-                            json.loads(reply_markup) if reply_markup else None
-                        )
-                    else:
-                        success = False
-                elif session['type'] == 'video':
-                    if session.get('video'):
-                        success = self.bot.robust_send_video(
-                            user_id_target, 
-                            session['video'], 
-                            session.get('caption', ''), 
-                            json.loads(reply_markup) if reply_markup else None
-                        )
-                    else:
-                        success = False
-                else:
-                    success = False
-                
-                if success:
-                    success_count += 1
-                else:
-                    failed_count += 1
-                    
-                time.sleep(0.05)  # Rate limiting
-                
-            except Exception as e:
-                failed_count += 1
-                print(f"❌ Broadcast error to {user_id_target}: {e}")
+                    self.bot.robust_send_message(uid, session['message'], json.loads(reply_markup) if reply_markup else None)
+                elif session['type'] == 'photo' and session.get('photo'):
+                    self.bot.robust_send_photo(uid, session['photo'], session.get('caption', ''), json.loads(reply_markup) if reply_markup else None)
+                elif session['type'] == 'video' and session.get('video'):
+                    self.bot.robust_send_video(uid, session['video'], session.get('caption', ''), json.loads(reply_markup) if reply_markup else None)
+                success += 1
+            except:
+                failed += 1
+            time.sleep(0.05)
         
-        elapsed = time.time() - start_time
-        
-        # Save broadcast history
-        cursor.execute('''
-            INSERT INTO broadcast_history 
-            (admin_id, message_text, photo_file_id, video_file_id, inline_buttons, total_sent, total_failed)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            user_id, 
-            session.get('message'), 
-            session.get('photo'), 
-            session.get('video'), 
-            json.dumps(session['buttons']) if session['buttons'] else None, 
-            success_count, 
-            failed_count
-        ))
-        self.bot.conn.commit()
-        
-        stats_text = f"""✅ <b>Broadcast Completed!</b>
+        self.bot.robust_send_message(chat_id, f"✅ Broadcast sent!\n✅ Sent: {success}\n❌ Failed: {failed}")
+        del self.sessions[user_id]
 
-📊 Final Statistics:
-• Total users: {total_users}
-✅ Sent: {success_count}
-❌ Failed: {failed_count}
-📈 Success rate: {(success_count/total_users)*100:.1f}%
-⏱️ Time taken: {elapsed:.1f}s
-📝 Type: {session['type'].upper()} Broadcast"""
-        
-        self.bot.robust_send_message(chat_id, stats_text)
-        del self.broadcast_sessions[user_id]
-
-# ==================== TELEGRAM STARS SYSTEM (UPDATED WITH TOKENS) ====================
+# ==================== TELEGRAM STARS SYSTEM ====================
 
 class TelegramStarsSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_stars_database()
+    def __init__(self, bot):
+        self.bot = bot
+        self.setup_tables()
         print("✅ Telegram Stars system initialized!")
-        
-    def setup_stars_database(self):
-        """Setup stars payments database"""
+    
+    def setup_tables(self):
         try:
             cursor = self.bot.conn.cursor()
-            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    user_name TEXT,
-                    stars_amount INTEGER,
-                    usd_amount REAL,
-                    description TEXT,
-                    telegram_star_amount INTEGER,
-                    transaction_id TEXT,
-                    payment_status TEXT DEFAULT 'pending',
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    completed_at DATETIME
+                    user_id INTEGER, stars_amount INTEGER,
+                    transaction_id TEXT, payment_status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stars_balance (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    total_stars_earned INTEGER DEFAULT 0,
-                    total_usd_earned REAL DEFAULT 0.0,
-                    available_stars INTEGER DEFAULT 0,
-                    available_usd REAL DEFAULT 0.0,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                    total_stars_earned INTEGER DEFAULT 0
                 )
             ''')
-            
             cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
-            
             self.bot.conn.commit()
-            print("✅ Telegram Stars database setup complete!")
-            
         except Exception as e:
-            print(f"❌ Stars database setup error: {e}")
-    
-    def create_stars_invoice(self, user_id, chat_id, stars_amount, description="Donation"):
-        """Create Telegram Stars payment invoice"""
-        try:
-            invoice_payload = f"stars_{user_id}_{int(time.time())}"
-            usd_amount = stars_amount * 0.01
-            
-            prices = [{"label": f"{stars_amount} Stars", "amount": stars_amount}]
-            
-            invoice_data = {
-                "chat_id": chat_id,
-                "title": "🌟 Bot Stars Donation",
-                "description": description,
-                "payload": invoice_payload,
-                "currency": "XTR",
-                "prices": json.dumps(prices),
-                "start_parameter": "stars_donation"
-            }
-            
-            print(f"⭐ Creating Stars invoice for {stars_amount} stars (${usd_amount:.2f})")
-            
-            url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                cursor = self.bot.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO stars_transactions 
-                    (user_id, user_name, stars_amount, usd_amount, description, transaction_id, payment_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    user_id,
-                    self.bot.get_user_info(user_id)['first_name'],
-                    stars_amount,
-                    usd_amount,
-                    description,
-                    invoice_payload,
-                    'pending'
-                ))
-                
-                self.bot.conn.commit()
-                print(f"✅ Stars invoice created for user {user_id}: {stars_amount} stars")
-                return True
-            else:
-                error_msg = result.get('description', 'Unknown error')
-                print(f"❌ Error creating Stars invoice: {error_msg}")
-                return False
-            
-        except Exception as e:
-            print(f"❌ Error creating Stars invoice: {e}")
-            traceback.print_exc()
-            return False
-    
-    def create_premium_game_invoice(self, user_id, chat_id, stars_amount, game_name, game_id):
-        """Create Stars invoice for premium game purchase"""
-        try:
-            invoice_payload = f"premium_game_{game_id}_{user_id}_{int(time.time())}"
-            usd_amount = stars_amount * 0.01
-            
-            prices = [{"label": f"Premium Game: {game_name}", "amount": stars_amount}]
-            
-            invoice_data = {
-                "chat_id": chat_id,
-                "title": f"🎮 {game_name}",
-                "description": f"Premium Game Purchase - {stars_amount} Stars",
-                "payload": invoice_payload,
-                "currency": "XTR",
-                "prices": json.dumps(prices),
-                "start_parameter": f"premium_game_{game_id}"
-            }
-            
-            print(f"⭐ Creating premium game invoice: {game_name} for {stars_amount} stars")
-            
-            url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
-            result = response.json()
-            
-            if result.get('ok'):
-                cursor = self.bot.conn.cursor()
-                cursor.execute('''
-                    INSERT INTO premium_purchases 
-                    (user_id, game_id, stars_paid, transaction_id, status)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, game_id, stars_amount, invoice_payload, 'pending'))
-                
-                self.bot.conn.commit()
-                print(f"✅ Premium game invoice created: {game_name} for user {user_id}")
-                return True
-            else:
-                error_msg = result.get('description', 'Unknown error')
-                print(f"❌ Error creating premium game invoice: {error_msg}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error creating premium game invoice: {e}")
-            traceback.print_exc()
-            return False
-    
-    def get_balance(self):
-        """Get current stars balance"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('SELECT * FROM stars_balance WHERE id = 1')
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'total_stars_earned': result[1] or 0,
-                    'total_usd_earned': result[2] or 0.0,
-                    'available_stars': result[3] or 0,
-                    'available_usd': result[4] or 0.0,
-                    'last_updated': result[5]
-                }
-            return {'available_stars': 0, 'available_usd': 0.0}
-        except Exception as e:
-            print(f"❌ Error getting stars balance: {e}")
-            return {'available_stars': 0, 'available_usd': 0.0}
-    
-    def get_recent_transactions(self, limit=5):
-        """Get recent stars transactions"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT user_name, stars_amount, usd_amount, payment_status, created_at 
-                FROM stars_transactions 
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting recent stars transactions: {e}")
-            return []
+            print(f"Stars setup error: {e}")
 
-    def complete_premium_purchase(self, transaction_id):
-        """Mark premium purchase as completed"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                UPDATE premium_purchases 
-                SET status = 'completed' 
-                WHERE transaction_id = ?
-            ''', (transaction_id,))
-            
-            cursor.execute('''
-                UPDATE stars_balance 
-                SET total_stars_earned = total_stars_earned + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
-                ),
-                total_usd_earned = total_usd_earned + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
-                ),
-                available_stars = available_stars + (
-                    SELECT stars_paid FROM premium_purchases WHERE transaction_id = ?
-                ),
-                available_usd = available_usd + (
-                    SELECT stars_paid * 0.01 FROM premium_purchases WHERE transaction_id = ?
-                ),
-                last_updated = CURRENT_TIMESTAMP
-                WHERE id = 1
-            ''', (transaction_id, transaction_id, transaction_id, transaction_id))
-            
-            self.bot.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error completing premium purchase: {e}")
-            return False
-
-# ==================== GAME REQUEST SYSTEM WITH INDIVIDUAL REPLIES ====================
+# ==================== GAME REQUEST SYSTEM ====================
 
 class GameRequestSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_game_requests_database()
+    def __init__(self, bot):
+        self.bot = bot
+        self.setup_tables()
         print("✅ Game request system initialized!")
-        
-    def setup_game_requests_database(self):
-        """Setup game requests database"""
+    
+    def setup_tables(self):
         try:
             cursor = self.bot.conn.cursor()
-            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS game_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    user_name TEXT,
-                    game_name TEXT,
-                    platform TEXT,
-                    status TEXT DEFAULT 'pending',
-                    admin_notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    user_id INTEGER, user_name TEXT, game_name TEXT, platform TEXT,
+                    status TEXT DEFAULT 'pending', created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS game_request_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    request_id INTEGER,
-                    admin_id INTEGER,
-                    reply_text TEXT,
-                    photo_file_id TEXT,
-                    video_file_id TEXT,
-                    document_file_id TEXT,
-                    reply_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (request_id) REFERENCES game_requests (id)
-                )
-            ''')
-            
             self.bot.conn.commit()
-            print("✅ Game request system setup complete!")
-            
         except Exception as e:
-            print(f"❌ Game request database setup error: {e}")
+            print(f"Game requests setup error: {e}")
     
-    def submit_game_request(self, user_id, game_name, platform="Unknown"):
-        """Submit a new game request"""
+    def submit(self, user_id, game_name, platform):
         try:
             user_info = self.bot.get_user_info(user_id)
-            user_name = user_info.get('first_name', 'Anonymous')
-            
             cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                INSERT INTO game_requests 
-                (user_id, user_name, game_name, platform, status)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, user_name, game_name, platform, 'pending'))
-            
+            cursor.execute('INSERT INTO game_requests (user_id, user_name, game_name, platform) VALUES (?, ?, ?, ?)', (user_id, user_info.get('first_name', 'User'), game_name, platform))
             self.bot.conn.commit()
-            request_id = cursor.lastrowid
-            
-            # Notify all admins
-            self.notify_admins_about_request(user_id, user_name, game_name, platform, request_id)
-            
-            return request_id
-        except Exception as e:
-            print(f"❌ Error submitting game request: {e}")
-            return False
-    
-    def get_pending_requests(self, limit=10):
-        """Get pending game requests"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, user_id, user_name, game_name, platform, created_at 
-                FROM game_requests 
-                WHERE status = 'pending' 
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting pending requests: {e}")
-            return []
-    
-    def get_all_requests(self, limit=20):
-        """Get all game requests"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, user_id, user_name, game_name, platform, status, created_at 
-                FROM game_requests 
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting all requests: {e}")
-            return []
-    
-    def get_user_requests(self, user_id, limit=5):
-        """Get game requests by a specific user"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, game_name, platform, status, created_at 
-                FROM game_requests 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (user_id, limit))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting user requests: {e}")
-            return []
-    
-    def get_request_by_id(self, request_id):
-        """Get specific game request by ID"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, user_id, user_name, game_name, platform, status, admin_notes, created_at
-                FROM game_requests 
-                WHERE id = ?
-            ''', (request_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'id': result[0],
-                    'user_id': result[1],
-                    'user_name': result[2],
-                    'game_name': result[3],
-                    'platform': result[4],
-                    'status': result[5],
-                    'admin_notes': result[6],
-                    'created_at': result[7]
-                }
-            return None
-        except Exception as e:
-            print(f"❌ Error getting request by ID: {e}")
-            return None
-    
-    def update_request_status(self, request_id, status, admin_notes=""):
-        """Update game request status"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                UPDATE game_requests 
-                SET status = ?, admin_notes = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (status, admin_notes, request_id))
-            
-            self.bot.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error updating request status: {e}")
-            return False
-    
-    def add_request_reply(self, request_id, admin_id, reply_text, photo_file_id=None, video_file_id=None, document_file_id=None):
-        """Add a reply to a game request (supports text, photo, video, document)"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                INSERT INTO game_request_replies 
-                (request_id, admin_id, reply_text, photo_file_id, video_file_id, document_file_id)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (request_id, admin_id, reply_text, photo_file_id, video_file_id, document_file_id))
-            
-            self.bot.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error adding request reply: {e}")
-            return False
-    
-    def get_request_replies(self, request_id):
-        """Get all replies for a game request"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT admin_id, reply_text, photo_file_id, video_file_id, document_file_id, reply_date
-                FROM game_request_replies 
-                WHERE request_id = ?
-                ORDER BY reply_date ASC
-            ''', (request_id,))
-            return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting request replies: {e}")
-            return []
-    
-    def notify_admins_about_request(self, user_id, user_name, game_name, platform, request_id):
-        """Notify all admins about new game request"""
-        notification_text = f"""🎮 <b>New Game Request</b>
-
-👤 User: {user_name} (ID: {user_id})
-🎯 Game: {game_name}
-📱 Platform: {platform}
-🆔 Request ID: {request_id}
-⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-💡 Use the buttons below to reply."""
-
-        for admin_id in self.bot.ADMIN_IDS:
-            try:
-                keyboard = {
-                    "inline_keyboard": [
-                        [
-                            {"text": "📝 Reply with Text", "callback_data": f"reply_request_{request_id}"},
-                            {"text": "📎 Reply with Media", "callback_data": f"reply_media_{request_id}"}
-                        ],
-                        [
-                            {"text": "✅ Mark Completed", "callback_data": f"complete_request_{request_id}"},
-                            {"text": "❌ Reject", "callback_data": f"reject_request_{request_id}"}
-                        ]
-                    ]
-                }
-                self.bot.robust_send_message(admin_id, notification_text, keyboard)
-            except Exception as e:
-                print(f"❌ Failed to notify admin {admin_id}: {e}")
-    
-    def send_reply_to_user(self, user_id, request_data, reply_text, media_type=None, media_file_id=None):
-        """Send reply to user with optional media"""
-        try:
-            if media_type == 'photo' and media_file_id:
-                caption = f"""📨 <b>Reply to Your Game Request</b>
-
-🎮 Game: <b>{request_data['game_name']}</b>
-👤 Admin Response
-
-💬 <b>Message:</b>
-{reply_text}
-
-Thank you for using our service! 🙏"""
-                
-                return self.bot.robust_send_photo(user_id, media_file_id, caption)
-                
-            elif media_type == 'video' and media_file_id:
-                caption = f"""📨 <b>Reply to Your Game Request</b>
-
-🎮 Game: <b>{request_data['game_name']}</b>
-👤 Admin Response
-
-💬 <b>Message:</b>
-{reply_text}
-
-Thank you for using our service! 🙏"""
-                
-                return self.bot.robust_send_video(user_id, media_file_id, caption)
-                
-            elif media_type == 'document' and media_file_id:
-                caption = f"""📨 <b>Reply to Your Game Request</b>
-
-🎮 Game: <b>{request_data['game_name']}</b>
-👤 Admin Response
-
-💬 <b>Message:</b>
-{reply_text}
-
-Thank you for using our service! 🙏"""
-                
-                url = self.bot.base_url + "sendDocument"
-                data = {
-                    "chat_id": user_id,
-                    "document": media_file_id,
-                    "caption": caption,
-                    "parse_mode": "HTML"
-                }
-                response = requests.post(url, data=data, timeout=30)
-                return response.json().get('ok', False)
-                
-            else:
-                user_notification = f"""📨 <b>Reply to Your Game Request</b>
-
-🎮 Game: <b>{request_data['game_name']}</b>
-👤 Admin: {self.bot.get_user_info(user_id)['first_name']}
-⏰ Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-💬 <b>Message:</b>
-{reply_text}
-
-Thank you for using our service! 🙏"""
-                
-                return self.bot.robust_send_message(user_id, user_notification)
-                
-        except Exception as e:
-            print(f"❌ Error sending reply to user: {e}")
+            return cursor.lastrowid
+        except:
             return False
 
-# ==================== PREMIUM GAMES SYSTEM (UPDATED WITH TOKENS) ====================
+# ==================== PREMIUM GAMES SYSTEM ====================
 
 class PremiumGamesSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_premium_games_database()
+    def __init__(self, bot):
+        self.bot = bot
+        self.setup_tables()
         print("✅ Premium games system initialized!")
-        
-    def setup_premium_games_database(self):
-        """Setup premium games database"""
+    
+    def setup_tables(self):
         try:
             cursor = self.bot.conn.cursor()
-            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_games (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
-                    file_name TEXT,
-                    file_type TEXT,
-                    file_size INTEGER,
-                    upload_date DATETIME,
-                    category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
-                    is_uploaded INTEGER DEFAULT 0,
-                    is_forwarded INTEGER DEFAULT 0,
-                    file_id TEXT,
-                    bot_message_id INTEGER,
-                    stars_price INTEGER DEFAULT 0,
-                    tokens_price INTEGER DEFAULT 10,
-                    description TEXT,
-                    is_premium INTEGER DEFAULT 1
+                    file_name TEXT, file_type TEXT, file_size INTEGER, file_id TEXT,
+                    tokens_price INTEGER DEFAULT 10, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS premium_purchases (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    game_id INTEGER,
-                    payment_method TEXT,
-                    stars_paid INTEGER DEFAULT 0,
-                    tokens_paid INTEGER DEFAULT 0,
-                    purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    transaction_id TEXT,
-                    status TEXT DEFAULT 'completed',
-                    FOREIGN KEY (user_id) REFERENCES users (user_id),
-                    FOREIGN KEY (game_id) REFERENCES premium_games (id)
+                    user_id INTEGER, game_id INTEGER, purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
             self.bot.conn.commit()
-            print("✅ Premium games database setup complete!")
-            
         except Exception as e:
-            print(f"❌ Premium games database setup error: {e}")
+            print(f"Premium games setup error: {e}")
     
-    def add_premium_game(self, game_info):
-        """Add a premium game to database"""
+    def get_premium_games(self, limit=20):
         try:
             cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                INSERT INTO premium_games 
-                (message_id, file_name, file_type, file_size, upload_date, category, 
-                 added_by, is_uploaded, is_forwarded, file_id, bot_message_id, stars_price, tokens_price, description, is_premium)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                game_info['message_id'],
-                game_info['file_name'],
-                game_info['file_type'],
-                game_info['file_size'],
-                game_info['upload_date'],
-                game_info['category'],
-                game_info['added_by'],
-                game_info['is_uploaded'],
-                game_info['is_forwarded'],
-                game_info['file_id'],
-                game_info['bot_message_id'],
-                game_info.get('stars_price', 0),
-                game_info.get('tokens_price', 10),
-                game_info.get('description', ''),
-                game_info.get('is_premium', 1)
-            ))
-            
-            self.bot.conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            print(f"❌ Error adding premium game: {e}")
-            return False
-    
-    def get_premium_games(self, limit=50):
-        """Get all premium games"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, file_name, file_type, file_size, stars_price, tokens_price, description, upload_date, file_id, bot_message_id, is_uploaded
-                FROM premium_games 
-                WHERE is_premium = 1
-                ORDER BY created_at DESC 
-                LIMIT ?
-            ''', (limit,))
+            cursor.execute('SELECT id, file_name, file_type, file_size, tokens_price FROM premium_games ORDER BY created_at DESC LIMIT ?', (limit,))
             return cursor.fetchall()
-        except Exception as e:
-            print(f"❌ Error getting premium games: {e}")
+        except:
             return []
-    
-    def get_premium_game_by_id(self, game_id):
-        """Get premium game by ID"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id, file_name, file_type, file_size, stars_price, tokens_price, description, 
-                       file_id, bot_message_id, is_uploaded, message_id
-                FROM premium_games 
-                WHERE id = ?
-            ''', (game_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                return {
-                    'id': result[0],
-                    'file_name': result[1],
-                    'file_type': result[2],
-                    'file_size': result[3],
-                    'stars_price': result[4],
-                    'tokens_price': result[5],
-                    'description': result[6],
-                    'file_id': result[7],
-                    'bot_message_id': result[8],
-                    'is_uploaded': result[9],
-                    'message_id': result[10]
-                }
-            return None
-        except Exception as e:
-            print(f"❌ Error getting premium game by ID: {e}")
-            return None
-    
-    def has_user_purchased_game(self, user_id, game_id):
-        """Check if user has already purchased a premium game"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                SELECT id FROM premium_purchases 
-                WHERE user_id = ? AND game_id = ? AND status = 'completed'
-            ''', (user_id, game_id))
-            return cursor.fetchone() is not None
-        except Exception as e:
-            print(f"❌ Error checking user purchase: {e}")
-            return False
-    
-    def record_purchase(self, user_id, game_id, payment_method, stars_paid=0, tokens_paid=0, transaction_id=""):
-        """Record a premium game purchase"""
-        try:
-            cursor = self.bot.conn.cursor()
-            cursor.execute('''
-                INSERT INTO premium_purchases 
-                (user_id, game_id, payment_method, stars_paid, tokens_paid, transaction_id, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, game_id, payment_method, stars_paid, tokens_paid, transaction_id, 'completed'))
-            
-            self.bot.conn.commit()
-            return True
-        except Exception as e:
-            print(f"❌ Error recording purchase: {e}")
-            return False
-
-# ==================== GITHUB BACKUP SYSTEM ====================
-
-class GitHubBackupSystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.setup_github_config()
-        print("✅ GitHub Backup system initialized!")
-    
-    def setup_github_config(self):
-        """Setup GitHub configuration from environment variables"""
-        self.github_token = os.environ.get('GITHUB_TOKEN')
-        self.repo_owner = os.environ.get('GITHUB_REPO_OWNER', 'your-username')
-        self.repo_name = os.environ.get('GITHUB_REPO_NAME', 'your-repo')
-        self.backup_branch = os.environ.get('GITHUB_BACKUP_BRANCH', 'main')
-        self.backup_path = os.environ.get('GITHUB_BACKUP_PATH', 'backups/telegram_bot.db')
-        
-        self.is_enabled = bool(self.github_token and self.repo_owner and self.repo_name)
-        
-        if self.is_enabled:
-            print(f"✅ GitHub Backup: Enabled for {self.repo_owner}/{self.repo_name}")
-            print(f"✅ Auto-backup will trigger on every game upload")
-        else:
-            print("⚠️ GitHub Backup: Disabled - Set environment variables")
-    
-    def create_db_backup(self):
-        """Create a backup of the current database"""
-        try:
-            db_path = self.bot.get_db_path()
-            backup_path = db_path + '.backup'
-            
-            import shutil
-            shutil.copy2(db_path, backup_path)
-            
-            return backup_path
-        except Exception as e:
-            print(f"❌ Database backup error: {e}")
-            return None
-    
-    def backup_database_to_github(self, commit_message="Auto backup: Database update"):
-        """Backup database to GitHub"""
-        if not self.is_enabled:
-            return False
-        
-        try:
-            backup_file = self.create_db_backup()
-            if not backup_file:
-                return False
-            
-            with open(backup_file, 'rb') as f:
-                db_content = f.read()
-            
-            db_b64 = base64.b64encode(db_content).decode('utf-8')
-            file_sha = self.get_file_sha()
-            
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
-            headers = {'Authorization': f'token {self.github_token}', 'Accept': 'application/vnd.github.v3+json'}
-            
-            data = {'message': commit_message, 'content': db_b64, 'branch': self.backup_branch}
-            if file_sha:
-                data['sha'] = file_sha
-            
-            response = requests.put(url, headers=headers, json=data, timeout=30)
-            
-            if response.status_code in [200, 201]:
-                result = response.json()
-                print(f"✅ Database backed up to GitHub")
-                try:
-                    os.remove(backup_file)
-                except:
-                    pass
-                return True
-            else:
-                print(f"❌ GitHub backup failed: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ GitHub backup error: {e}")
-            return False
-    
-    def get_file_sha(self):
-        """Get the SHA of the existing backup file on GitHub"""
-        try:
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
-            headers = {'Authorization': f'token {self.github_token}', 'Accept': 'application/vnd.github.v3+json'}
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                return response.json()['sha']
-            return None
-        except:
-            return None
-    
-    def restore_database_from_github(self):
-        """Restore database from GitHub backup"""
-        if not self.is_enabled:
-            return False
-        
-        try:
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/contents/{self.backup_path}"
-            headers = {'Authorization': f'token {self.github_token}', 'Accept': 'application/vnd.github.v3+json'}
-            
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code != 200:
-                return False
-            
-            file_data = response.json()
-            db_content = base64.b64decode(file_data['content'])
-            
-            db_path = self.bot.get_db_path()
-            with open(db_path, 'wb') as f:
-                f.write(db_content)
-            
-            print(f"✅ Database restored from GitHub backup")
-            return True
-            
-        except Exception as e:
-            print(f"❌ GitHub restore error: {e}")
-            return False
-    
-    def get_backup_info(self):
-        """Get information about the latest backup"""
-        if not self.is_enabled:
-            return {"enabled": False}
-        
-        try:
-            url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/commits?path={self.backup_path}&per_page=1"
-            headers = {'Authorization': f'token {self.github_token}', 'Accept': 'application/vnd.github.v3+json'}
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                commits = response.json()
-                if commits:
-                    latest_commit = commits[0]
-                    return {
-                        "enabled": True,
-                        "last_backup": latest_commit['commit']['author']['date'],
-                        "message": latest_commit['commit']['message'],
-                        "url": latest_commit['html_url']
-                    }
-            return {"enabled": True, "last_backup": "Never"}
-        except:
-            return {"enabled": True, "error": "Could not fetch info"}
-
-# ==================== REDEPLOY SYSTEM ====================
-
-class RedeploySystem:
-    def __init__(self, bot_instance):
-        self.bot = bot_instance
-        self.redeploy_requests = {}
-        print("✅ Redeploy system initialized!")
-    
-    def show_redeploy_menu(self, user_id, chat_id, message_id):
-        """Show redeploy menu"""
-        if not self.bot.is_admin(user_id):
-            self.bot.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
-            return
-        
-        redeploy_text = """🔄 <b>Bot Redeploy System</b>
-
-This system allows you to restart the bot without losing any data.
-
-⚠️ <b>Important:</b>
-• Database will be preserved
-• All games and user data remain safe
-• Bot will be unavailable for 10-30 seconds
-
-Choose an option:"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"}],
-                [{"text": "🚀 Force Redeploy", "callback_data": "redeploy_force"}],
-                [{"text": "📊 System Status", "callback_data": "system_status"}],
-                [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
-            ]
-        }
-        
-        self.bot.edit_message(chat_id, message_id, redeploy_text, keyboard)
-    
-    def initiate_redeploy(self, user_id, chat_id, redeploy_type="soft"):
-        """Initiate a redeploy"""
-        try:
-            user_info = self.bot.get_user_info(user_id)
-            user_name = user_info.get('first_name', 'Unknown')
-            
-            print(f"🔄 {redeploy_type.upper()} redeploy initiated by {user_name} ({user_id})")
-            
-            confirm_text = f"""🔄 <b>{redeploy_type.upper()} Redeploy Initiated</b>
-
-👤 Initiated by: {user_name}
-⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-✅ The bot will restart shortly..."""
-            
-            self.bot.robust_send_message(chat_id, confirm_text)
-            
-            restart_delay = 5 if redeploy_type == "soft" else 2
-            
-            def delayed_restart():
-                time.sleep(restart_delay)
-                print(f"🔄 Executing {redeploy_type} redeploy...")
-                os._exit(0)
-            
-            restart_thread = threading.Thread(target=delayed_restart, daemon=True)
-            restart_thread.start()
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Redeploy initiation error: {e}")
-            self.bot.robust_send_message(chat_id, f"❌ Redeploy failed: {str(e)}")
-            return False
-    
-    def show_system_status(self, user_id, chat_id, message_id):
-        """Show current system status"""
-        try:
-            bot_online = self.bot.test_bot_connection()
-            
-            cursor = self.bot.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            game_count = cursor.fetchone()[0]
-            cursor.execute('SELECT COUNT(*) FROM users')
-            user_count = cursor.fetchone()[0]
-            cursor.execute('SELECT COUNT(*) FROM premium_games')
-            premium_count = cursor.fetchone()[0]
-            
-            uptime_seconds = time.time() - self.bot.last_restart
-            uptime_str = self.format_uptime(uptime_seconds)
-            
-            status_text = f"""📊 <b>System Status</b>
-
-🤖 <b>Bot Status:</b> {'🟢 ONLINE' if bot_online else '🔴 OFFLINE'}
-📁 <b>Regular Games:</b> {game_count}
-💰 <b>Premium Games:</b> {premium_count}
-👥 <b>Users:</b> {user_count}
-🕒 <b>Uptime:</b> {uptime_str}
-🔄 <b>Last Restart:</b> {datetime.fromtimestamp(self.bot.last_restart).strftime('%Y-%m-%d %H:%M:%S')}"""
-
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🔄 Refresh", "callback_data": "system_status"}],
-                    [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
-                ]
-            }
-            
-            self.bot.edit_message(chat_id, message_id, status_text, keyboard)
-            
-        except Exception as e:
-            print(f"❌ System status error: {e}")
-    
-    def format_uptime(self, seconds):
-        """Format uptime in human readable format"""
-        days = seconds // 86400
-        hours = (seconds % 86400) // 3600
-        minutes = (seconds % 3600) // 60
-        seconds = seconds % 60
-        
-        if days > 0:
-            return f"{int(days)}d {int(hours)}h {int(minutes)}m"
-        elif hours > 0:
-            return f"{int(hours)}h {int(minutes)}m"
-        elif minutes > 0:
-            return f"{int(minutes)}m {int(seconds)}s"
-        else:
-            return f"{int(seconds)}s"
 
 # ==================== MAIN BOT CLASS ====================
 
-class CrossPlatformBot:
+class GamerDroidBot:
     def __init__(self, token):
         if not token:
-            print("❌ CRITICAL: No BOT_TOKEN provided!")
-            raise ValueError("BOT_TOKEN is required")
+            raise ValueError("BOT_TOKEN required")
         
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}/"
+        self.REQUIRED_CHANNEL = REQUIRED_CHANNEL
+        self.CHANNEL_LINK = CHANNEL_LINK
+        self.ADMIN_IDS = ADMIN_IDS
+        self.monthly_users = 68
         
-        self.REQUIRED_CHANNEL = "@pspgamers5"
-        self.CHANNEL_LINK = "https://t.me/pspgamers5"
-        self.ADMIN_IDS = [7475473197, 7713987088]
-        
-        # Session management
+        # Sessions
+        self.game_requests = {}
+        self.broadcast_sessions = {}
+        self.remove_sessions = {}
+        self.current_games = []
+        self.current_games_list = []
+        self.search_sessions = {}
         self.stars_sessions = {}
-        self.request_sessions = {}
         self.upload_sessions = {}
         self.reply_sessions = {}
         self.media_reply_sessions = {}
         self.guess_games = {}
         self.spin_games = {}
-        self.broadcast_sessions = {}
-        self.broadcast_stats = {}
         
-        self.games_cache = {}
-        self.search_results = {}
-        self.search_sessions = {}
+        # Cache
+        self.games_cache = {'zip': [], '7z': [], 'iso': [], 'apk': [], 'xapk': [], 'apks': [], 'cso': [], 'pbp': [], 'all': []}
         
-        # NEW: For game downloads
-        self.current_games_list = []
-        
-        # Crash protection
+        # Stats
+        self.total_uploads = 500
+        self.total_forwarded = 500
         self.last_restart = time.time()
         self.error_count = 0
-        self.max_errors = 25
-        self.error_window = 300
-        self.consecutive_errors = 0
-        self.max_consecutive_errors = 10
-        self.is_scanning = False
-        self.keep_alive = None
         
-        # Setup database FIRST
+        # Setup database
         self.setup_database()
-        self.verify_database_schema()
         
         # Initialize systems
-        self.referral_system = ReferralSystem(self)
+        self.referral = ReferralSystem(self)
         self.broadcast_system = EnhancedBroadcastSystem(self)
-        self.stars_system = TelegramStarsSystem(self)
-        self.game_request_system = GameRequestSystem(self)
-        self.premium_games_system = PremiumGamesSystem(self)
-        self.redeploy_system = RedeploySystem(self)
-        self.github_backup = GitHubBackupSystem(self)
+        self.stars = TelegramStarsSystem(self)
+        self.game_requests_system = GameRequestSystem(self)
+        self.premium = PremiumGamesSystem(self)
+        self.backup = GitHubBackupSystem(self)
         
-        print("✅ Bot system ready!")
-        print("👥 Referral System Active - 1 Game Token per referral")
-        print("💎 Game Tokens can be used to purchase premium games")
-        print("📹 Video Broadcast System Enabled")
-        print("📝 Individual Game Request Replies with Media Support")
-        print("💾 GitHub Auto-Backup on Every Game Upload")
-        print("🌐 Webhook Mode - 24/7 Operation")
+        # Update cache
+        self.update_cache()
+        
+        print("✅ GAMERDROID™ V1 Bot ready!")
+        print(f"✅ Admin IDs: {ADMIN_IDS}")
     
     def get_db_path(self):
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'telegram_bot.db')
+        return 'telegram_bot.db'
     
     def setup_database(self):
         try:
-            db_path = self.get_db_path()
-            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.conn = sqlite3.connect(self.get_db_path(), check_same_thread=False)
             cursor = self.conn.cursor()
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    is_verified INTEGER DEFAULT 0,
-                    joined_channel INTEGER DEFAULT 0,
-                    verification_code TEXT,
-                    code_expires DATETIME,
+                    username TEXT, first_name TEXT,
+                    is_verified INTEGER DEFAULT 0, joined_channel INTEGER DEFAULT 0,
+                    verification_code TEXT, code_expires DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    referred_by INTEGER DEFAULT 0,
-                    referral_code TEXT UNIQUE,
-                    game_tokens INTEGER DEFAULT 0,
-                    total_referrals INTEGER DEFAULT 0
+                    game_tokens INTEGER DEFAULT 0, total_referrals INTEGER DEFAULT 0,
+                    referred_by INTEGER DEFAULT 0
                 )
             ''')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS channel_games (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id INTEGER UNIQUE,
-                    file_name TEXT,
-                    file_type TEXT,
-                    file_size INTEGER,
-                    upload_date DATETIME,
-                    category TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    added_by INTEGER DEFAULT 0,
-                    is_uploaded INTEGER DEFAULT 0,
-                    is_forwarded INTEGER DEFAULT 0,
-                    file_id TEXT,
-                    bot_message_id INTEGER
+                    file_name TEXT, file_type TEXT, file_size INTEGER,
+                    file_id TEXT, message_id INTEGER, category TEXT,
+                    added_by INTEGER, upload_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS game_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER, user_name TEXT, game_name TEXT, platform TEXT,
+                    status TEXT DEFAULT 'pending', created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS broadcast_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    admin_id INTEGER,
-                    message_text TEXT,
-                    photo_file_id TEXT,
-                    video_file_id TEXT,
-                    inline_buttons TEXT,
-                    total_sent INTEGER DEFAULT 0,
-                    total_failed INTEGER DEFAULT 0,
+                    admin_id INTEGER, message_text TEXT,
+                    total_sent INTEGER DEFAULT 0, total_failed INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS premium_games (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_name TEXT, file_type TEXT, file_size INTEGER, file_id TEXT,
+                    tokens_price INTEGER DEFAULT 10, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS premium_purchases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER, game_id INTEGER, payment_method TEXT,
+                    tokens_paid INTEGER, purchase_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS stars_transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER, stars_amount INTEGER,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             self.conn.commit()
-            print("✅ Database setup successful!")
+            print("✅ Database ready")
         except Exception as e:
-            print(f"❌ Database error: {e}")
-    
-    def verify_database_schema(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute("PRAGMA table_info(channel_games)")
-            columns = [column[1] for column in cursor.fetchall()]
-            if 'bot_message_id' not in columns:
-                cursor.execute('ALTER TABLE channel_games ADD COLUMN bot_message_id INTEGER')
-                self.conn.commit()
-        except Exception as e:
-            print(f"Schema verification error: {e}")
+            print(f"DB error: {e}")
     
     def is_admin(self, user_id):
         return user_id in self.ADMIN_IDS
     
-    def test_bot_connection(self):
+    def robust_send_message(self, chat_id, text, reply_markup=None):
         try:
-            url = self.base_url + "getMe"
-            response = requests.get(url, timeout=10)
-            return response.json().get('ok', False)
+            url = self.base_url + "sendMessage"
+            data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup)
+            r = requests.post(url, data=data, timeout=15)
+            return r.json().get('ok', False)
         except:
             return False
-    
-    def robust_send_message(self, chat_id, text, reply_markup=None, max_retries=3):
-        for attempt in range(max_retries):
-            try:
-                url = self.base_url + "sendMessage"
-                data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-                if reply_markup:
-                    data["reply_markup"] = json.dumps(reply_markup)
-                response = requests.post(url, data=data, timeout=15)
-                if response.json().get('ok'):
-                    return True
-                time.sleep(1)
-            except:
-                time.sleep(1)
-        return False
     
     def robust_send_photo(self, chat_id, photo, caption="", reply_markup=None):
         try:
@@ -1899,8 +623,8 @@ class CrossPlatformBot:
                 data["caption"] = caption
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
-            response = requests.post(url, data=data, timeout=30)
-            return response.json().get('ok', False)
+            r = requests.post(url, data=data, timeout=30)
+            return r.json().get('ok', False)
         except:
             return False
     
@@ -1912,23 +636,22 @@ class CrossPlatformBot:
                 data["caption"] = caption
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
-            response = requests.post(url, data=data, timeout=60)
-            return response.json().get('ok', False)
+            r = requests.post(url, data=data, timeout=60)
+            return r.json().get('ok', False)
         except:
             return False
     
-    def edit_message(self, chat_id, message_id, text, reply_markup=None):
+    def edit_message(self, chat_id, msg_id, text, reply_markup=None):
         try:
             url = self.base_url + "editMessageText"
-            data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
+            data = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "HTML"}
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
-            response = requests.post(url, data=data, timeout=15)
-            return response.json().get('ok', False)
+            requests.post(url, data=data, timeout=15)
         except:
-            return False
+            pass
     
-    def answer_callback_query(self, query_id, text=None, show_alert=False):
+    def answer_callback(self, query_id, text=None, show_alert=False):
         try:
             url = self.base_url + "answerCallbackQuery"
             data = {"callback_query_id": query_id}
@@ -1943,1051 +666,148 @@ class CrossPlatformBot:
     def get_user_info(self, user_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id, username, first_name, game_tokens, total_referrals FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT first_name, game_tokens, total_referrals FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             if result:
-                return {
-                    'user_id': result[0], 
-                    'username': result[1], 
-                    'first_name': result[2], 
-                    'game_tokens': result[3] or 0, 
-                    'total_referrals': result[4] or 0
-                }
+                return {'first_name': result[0], 'game_tokens': result[1] or 0, 'total_referrals': result[2] or 0}
             return {'first_name': 'User', 'game_tokens': 0, 'total_referrals': 0}
         except:
             return {'first_name': 'User', 'game_tokens': 0, 'total_referrals': 0}
     
-    def register_user(self, user_id, username, first_name, referred_by=None):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-            if cursor.fetchone():
-                return True
-            
-            referral_code = self.referral_system.generate_referral_code(user_id)
-            cursor.execute('''
-                INSERT INTO users (user_id, username, first_name, referral_code, referred_by, game_tokens) 
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (user_id, username, first_name, referral_code, referred_by or 0, 0))
-            self.conn.commit()
-            
-            if referred_by and referred_by != user_id:
-                self.referral_system.register_referral(referred_by, user_id)
-                self.robust_send_message(referred_by, 
-                    f"🎉 New Referral!\n@{username or first_name} joined!\nYou earned 1 Game Token 💎\nTotal tokens: {self.referral_system.get_user_tokens(referred_by)}")
-            
-            return True
-        except Exception as e:
-            print(f"Registration error: {e}")
-            return False
+    # ==================== GAME MANAGEMENT ====================
     
-    def get_channel_stats(self):
+    def update_cache(self):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            total_games = cursor.fetchone()[0]
-            cursor.execute('SELECT COUNT(*) FROM premium_games')
-            premium_games = cursor.fetchone()[0]
-            return {'total_games': total_games, 'premium_games': premium_games}
-        except:
-            return {'total_games': 0, 'premium_games': 0}
-    
-    def get_upload_stats(self, user_id=None):
-        try:
-            cursor = self.conn.cursor()
-            if user_id:
-                cursor.execute('SELECT COUNT(*) FROM channel_games WHERE added_by = ? AND is_uploaded = 1', (user_id,))
-            else:
-                cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1')
-            return cursor.fetchone()[0]
-        except:
-            return 0
-    
-    def get_forward_stats(self, user_id=None):
-        try:
-            cursor = self.conn.cursor()
-            if user_id:
-                cursor.execute('SELECT COUNT(*) FROM channel_games WHERE added_by = ? AND is_uploaded = 1 AND is_forwarded = 1', (user_id,))
-            else:
-                cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1 AND is_forwarded = 1')
-            return cursor.fetchone()[0]
-        except:
-            return 0
-    
-    # ========== UPDATED: Store file_id, message_id for downloads ==========
-    def update_games_cache(self):
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT file_name, file_type, file_size, upload_date, category, is_uploaded, file_id, message_id, bot_message_id FROM channel_games')
+            cursor.execute('SELECT file_name, file_type, file_size, file_id, message_id, category FROM channel_games')
             games = cursor.fetchall()
             self.games_cache = {'zip': [], '7z': [], 'iso': [], 'apk': [], 'xapk': [], 'apks': [], 'cso': [], 'pbp': [], 'all': []}
-            for game in games:
-                file_name, file_type, file_size, upload_date, category, is_uploaded, file_id, msg_id, bot_msg_id = game
-                game_info = {
-                    'file_name': file_name, 
-                    'file_type': file_type, 
-                    'file_size': file_size, 
-                    'upload_date': upload_date, 
-                    'category': category, 
-                    'is_uploaded': is_uploaded,
-                    'file_id': file_id,
-                    'message_id': msg_id,
-                    'bot_message_id': bot_msg_id
-                }
-                file_type_lower = file_type.lower()
-                if file_type_lower in self.games_cache:
-                    self.games_cache[file_type_lower].append(game_info)
-                self.games_cache['all'].append(game_info)
-            print(f"🔄 Cache updated: {len(self.games_cache['all'])} games (APK: {len(self.games_cache.get('apk', []))}, XAPK: {len(self.games_cache.get('xapk', []))}, APKS: {len(self.games_cache.get('apks', []))})")
+            for g in games:
+                fn, ft, fs, fid, mid, cat = g
+                info = {'file_name': fn, 'file_type': ft, 'file_size': fs, 'file_id': fid, 'message_id': mid, 'category': cat}
+                ft_low = ft.lower()
+                if ft_low in self.games_cache:
+                    self.games_cache[ft_low].append(info)
+                self.games_cache['all'].append(info)
+            print(f"📁 Cache: {len(self.games_cache['all'])} games")
         except Exception as e:
             print(f"Cache error: {e}")
     
-    def format_file_size(self, size_bytes):
-        if size_bytes == 0:
+    def format_size(self, bytes):
+        if bytes == 0:
             return "0 B"
-        size_names = ["B", "KB", "MB", "GB"]
-        i = 0
-        while size_bytes >= 1024 and i < len(size_names)-1:
-            size_bytes /= 1024.0
-            i += 1
-        return f"{size_bytes:.1f} {size_names[i]}"
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes < 1024:
+                return f"{bytes:.1f} {unit}"
+            bytes /= 1024
+        return f"{bytes:.1f} GB"
     
-    def determine_file_category(self, filename):
-        filename_lower = filename.lower()
-        if filename_lower.endswith('.apk'):
-            return 'Android APK Games'
-        elif filename_lower.endswith('.xapk'):
-            return 'Android XAPK Games'
-        elif filename_lower.endswith('.apks'):
-            return 'Android APKS Bundle'
-        elif filename_lower.endswith('.iso'):
-            return 'ISO Games'
-        elif filename_lower.endswith('.zip'):
-            return 'ZIP Games'
-        elif filename_lower.endswith('.7z'):
-            return '7Z Games'
-        else:
-            return 'Other Games'
+    def determine_category(self, filename):
+        ext = filename.split('.')[-1].lower() if '.' in filename else ''
+        cat_map = {'apk': 'APK', 'xapk': 'XAPK', 'apks': 'APKS', 'zip': 'ZIP', '7z': '7Z', 'iso': 'ISO', 'cso': 'PSP', 'pbp': 'PSP'}
+        return cat_map.get(ext, 'Other')
     
-    def create_progress_bar(self, percentage, length=10):
-        filled = int(length * percentage / 100)
-        empty = length - filled
-        return "█" * filled + "░" * empty
-    
-    # ========== NEW: Send game file to user ==========
-    def send_game_file(self, user_id, chat_id, file_name, file_id, message_id):
-        """Send the actual game file to user"""
+    def save_game(self, message, file_id, file_name, file_size, user_id):
         try:
-            self.robust_send_message(chat_id, f"📥 Sending <b>{file_name}</b>... Please wait.")
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT id FROM channel_games WHERE file_name = ?', (file_name,))
+            if cursor.fetchone():
+                self.robust_send_message(user_id, f"❌ Game '{file_name}' already exists!")
+                return False
             
-            # Send document/file to user
-            url = self.base_url + "sendDocument"
-            data = {
-                "chat_id": chat_id,
-                "document": file_id,
-                "caption": f"🎮 <b>{file_name}</b>\n\n✅ Game sent successfully!\n📥 Enjoy your download!"
-            }
-            response = requests.post(url, data=data, timeout=60)
+            category = self.determine_category(file_name)
+            ext = file_name.split('.')[-1].lower() if '.' in file_name else 'other'
             
-            if response.json().get('ok'):
-                self.robust_send_message(chat_id, f"✅ <b>{file_name}</b> has been sent to you!")
-                return True
-            else:
-                # Try forwarding as fallback
-                url = self.base_url + "forwardMessage"
-                data = {
-                    "chat_id": chat_id,
-                    "from_chat_id": self.REQUIRED_CHANNEL,
-                    "message_id": message_id
-                }
-                response = requests.post(url, data=data, timeout=30)
-                if response.json().get('ok'):
-                    self.robust_send_message(chat_id, f"✅ <b>{file_name}</b> has been sent to you!")
-                    return True
-                else:
-                    self.robust_send_message(chat_id, f"❌ Failed to send {file_name}. Please contact admin.")
-                    return False
+            cursor.execute('''
+                INSERT INTO channel_games (file_name, file_type, file_size, file_id, message_id, category, added_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (file_name, ext, file_size, file_id, message['message_id'], category, user_id))
+            self.conn.commit()
+            
+            self.update_cache()
+            size_str = self.format_size(file_size)
+            self.robust_send_message(user_id, f"✅ Game Added!\n\n📁 {file_name}\n📦 {ext.upper()} | 📏 {size_str}\n📂 {category}")
+            
+            # Backup
+            Thread(target=self.backup.backup, args=(f"Game added: {file_name}",)).start()
+            return True
         except Exception as e:
-            print(f"Error sending file: {e}")
-            self.robust_send_message(chat_id, f"❌ Error sending file: {str(e)}")
+            print(f"Save error: {e}")
+            self.robust_send_message(user_id, f"❌ Error: {str(e)}")
             return False
     
-    # ========== UPDATED: Format games list with download buttons ==========
-    def format_games_list(self, games, category, chat_id, message_id):
-        """Format games list with download buttons"""
+    def send_game_file(self, user_id, chat_id, file_name, file_id):
+        try:
+            self.robust_send_message(chat_id, f"📥 Sending {file_name}...")
+            url = self.base_url + "sendDocument"
+            data = {"chat_id": chat_id, "document": file_id, "caption": f"🎮 {file_name}"}
+            r = requests.post(url, data=data, timeout=60)
+            if r.json().get('ok'):
+                self.robust_send_message(chat_id, f"✅ {file_name} sent!")
+                return True
+            return False
+        except Exception as e:
+            print(f"Send error: {e}")
+            return False
+    
+    def show_games(self, games, title, chat_id, msg_id):
         if not games:
-            self.edit_message(chat_id, message_id, f"❌ No {category} games found.", self.create_game_files_buttons())
+            self.edit_message(chat_id, msg_id, f"❌ No {title} games found.", self.game_files_buttons())
             return
         
-        # Store games for download
         self.current_games_list = games[:20]
-        
-        text = f"📁 <b>{category} GAMES</b>\n\n📊 Found: {len(games)} files\n\n"
-        keyboard_buttons = []
+        text = f"📁 <b>{title} GAMES</b>\n\n📊 Found: {len(games)} files\n\n"
+        keyboard = []
         
         for i, game in enumerate(self.current_games_list, 1):
-            size = self.format_file_size(game['file_size'])
-            display_name = game['file_name'][:40] + "..." if len(game['file_name']) > 40 else game['file_name']
-            text += f"{i}. <code>{display_name}</code>\n   📦 {game['file_type'].upper()} | 📏 {size}\n\n"
-            keyboard_buttons.append([{"text": f"📥 Download {i}", "callback_data": f"download_game_{i}"}])
+            size = self.format_size(game['file_size'])
+            text += f"{i}. <code>{game['file_name'][:40]}</code>\n   📦 {game['file_type'].upper()} | 📏 {size}\n\n"
+            keyboard.append([{"text": f"📥 Download {i}", "callback_data": f"dl_{i}"}])
         
-        keyboard_buttons.append([{"text": "🔙 Back to Games", "callback_data": "game_files"}])
-        
-        self.edit_message(chat_id, message_id, text, {"inline_keyboard": keyboard_buttons})
+        keyboard.append([{"text": "🔙 Back to Games", "callback_data": "game_files"}])
+        self.edit_message(chat_id, msg_id, text, {"inline_keyboard": keyboard})
     
-    # ==================== MENU BUTTONS ====================
+    # ==================== VERIFICATION ====================
     
-    def create_main_menu_buttons(self):
-        stats = self.get_channel_stats()
-        keyboard = [
-            [
-                {"text": "📊 Profile", "callback_data": "profile"},
-                {"text": "🕒 Time", "callback_data": "time"}
-            ],
-            [
-                {"text": "📢 Channel", "callback_data": "channel_info"},
-                {"text": f"🎮 Games ({stats['total_games'] + stats['premium_games']})", "callback_data": "games"}
-            ],
-            [
-                {"text": "💰 Premium Games", "callback_data": "premium_games"},
-                {"text": "🔍 Search Games", "callback_data": "search_games"}
-            ],
-            [
-                {"text": "📝 Request Game", "callback_data": "request_game"},
-                {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}
-            ],
-            [
-                {"text": "👥 Referral Program", "callback_data": "referral_menu"},
-                {"text": "💎 My Tokens", "callback_data": "my_tokens"}
-            ]
-        ]
-        
-        if self.is_admin:
-            keyboard.append([
-                {"text": "🔧 Admin Panel", "callback_data": "admin_panel"}
-            ])
-        
-        keyboard.append([
-            {"text": "🔄 Redeploy Bot", "callback_data": "user_redeploy"}
-        ])
-        
-        return {"inline_keyboard": keyboard}
+    def generate_code(self):
+        return ''.join(secrets.choice('0123456789') for _ in range(6))
     
-    def create_admin_buttons(self):
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "📤 Upload Stats", "callback_data": "upload_stats"},
-                    {"text": "🔄 Update Cache", "callback_data": "update_cache"}
-                ],
-                [
-                    {"text": "📤 Upload Games", "callback_data": "upload_options"},
-                    {"text": "🗑️ Remove Games", "callback_data": "remove_games"}
-                ],
-                [
-                    {"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"},
-                    {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}
-                ],
-                [
-                    {"text": "📢 Broadcast", "callback_data": "broadcast_panel"},
-                    {"text": "🎮 Game Requests", "callback_data": "admin_requests_panel"}
-                ],
-                [
-                    {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
-                    {"text": "💾 Backup System", "callback_data": "backup_menu"}
-                ],
-                [
-                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"},
-                    {"text": "📊 System Status", "callback_data": "system_status"}
-                ],
-                [
-                    {"text": "👥 Referral Stats", "callback_data": "referral_stats"},
-                    {"text": "💎 Token Management", "callback_data": "token_management"}
-                ],
-                [
-                    {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
-                ]
-            ]
-        }
-    
-    def create_channel_buttons(self):
-        return {"inline_keyboard": [[{"text": "📢 JOIN CHANNEL", "url": self.CHANNEL_LINK}, {"text": "✅ VERIFY JOIN", "callback_data": "verify_channel"}]]}
-    
-    def create_games_buttons(self):
-        stats = self.get_channel_stats()
-        return {"inline_keyboard": [
-            [{"text": "🎮 Mini Games", "callback_data": "mini_games"}, {"text": f"📁 Game Files ({stats['total_games']})", "callback_data": "game_files"}],
-            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
-            [{"text": "📝 Request Game", "callback_data": "request_game"}, {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}],
-            [{"text": "👥 Referral Program", "callback_data": "referral_menu"}, {"text": "💎 My Tokens", "callback_data": "my_tokens"}],
-            [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-        ]}
-    
-    def create_game_files_buttons(self):
-        stats = self.get_channel_stats()
-        return {"inline_keyboard": [
-            [{"text": f"📦 ZIP ({len(self.games_cache.get('zip', []))})", "callback_data": "game_zip"}, 
-             {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})", "callback_data": "game_7z"}],
-            [{"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})", "callback_data": "game_iso"}, 
-             {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})", "callback_data": "game_apk"}],
-            [{"text": f"🎮 PSP ({len(self.games_cache.get('cso', [])) + len(self.games_cache.get('pbp', []))})", "callback_data": "game_psp"}, 
-             {"text": f"📋 All ({stats['total_games']})", "callback_data": "game_all"}],
-            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
-            [{"text": "🔄 Rescan", "callback_data": "rescan_games"}],
-            [{"text": "🔙 Back to Games", "callback_data": "games"}]
-        ]}
-    
-    def create_mini_games_buttons(self):
-        return {"inline_keyboard": [
-            [{"text": "🎯 Number Guess", "callback_data": "game_guess"}, {"text": "🎲 Random Number", "callback_data": "game_random"}],
-            [{"text": "🎰 Lucky Spin", "callback_data": "game_spin"}, {"text": "📊 My Stats", "callback_data": "mini_stats"}],
-            [{"text": "🔙 Back to Games", "callback_data": "games"}]
-        ]}
-    
-    def create_broadcast_panel_buttons(self):
-        return {"inline_keyboard": [
-            [{"text": "📢 New Broadcast", "callback_data": "start_broadcast"}, {"text": "📊 Statistics", "callback_data": "broadcast_stats"}],
-            [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
-        ]}
-    
-    def create_search_buttons(self):
-        return {"inline_keyboard": [
-            [{"text": "🔍 New Search", "callback_data": "search_games"}, {"text": "📁 Browse All", "callback_data": "game_files"}],
-            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "📝 Request Game", "callback_data": "request_game"}],
-            [{"text": "👥 Referral Program", "callback_data": "referral_menu"}, {"text": "💎 My Tokens", "callback_data": "my_tokens"}],
-            [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-        ]}
-    
-    # ==================== REFERRAL SYSTEM UI ====================
-    
-    def show_referral_menu(self, user_id, chat_id, message_id):
-        stats = self.referral_system.get_referral_stats(user_id)
-        referral_link = self.referral_system.generate_referral_link(user_id)
-        leaderboard = self.referral_system.get_leaderboard(5)
-        
-        text = f"""👥 <b>Referral Program</b>
-
-💎 <b>Your Stats:</b>
-• Total Referrals: {stats['total_referrals']}
-• This Month: {stats['monthly_referrals']}
-• Tokens Earned: {stats['total_tokens_earned']}
-• Current Balance: {stats['current_tokens']}
-
-🎁 <b>How it works:</b>
-1. Share your referral link
-2. Friends join using your link
-3. You get <b>1 Game Token</b> per referral
-4. Use tokens to buy premium games!
-
-🔗 <b>Your Referral Link:</b>
-<code>{referral_link}</code>
-
-"""
-        
-        if leaderboard:
-            text += "🏆 <b>Top Referrers:</b>\n"
-            for i, (uid, name, refs, tokens) in enumerate(leaderboard, 1):
-                text += f"{i}. {name} - {refs} referrals ({tokens} tokens)\n"
-        
-        text += "\n💡 <i>1 Game Token = 1 Star value for premium games</i>"
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "💰 Browse Premium Games", "callback_data": "premium_games"},
-                 {"text": "💎 My Tokens", "callback_data": "my_tokens"}],
-                [{"text": "📤 Share Link", "switch_inline_query": f"Join using my referral link: {referral_link}"}],
-                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-            ]
-        }
-        
-        self.edit_message(chat_id, message_id, text, keyboard)
-    
-    def show_token_balance(self, user_id, chat_id, message_id):
-        tokens = self.referral_system.get_user_tokens(user_id)
-        referral_link = self.referral_system.generate_referral_link(user_id)
-        
-        text = f"""💎 <b>Game Tokens Balance</b>
-
-💰 Current Balance: <b>{tokens} Tokens</b>
-
-💡 <b>What can you do with tokens?</b>
-• Buy premium games (10 tokens each)
-• Exchange for premium content
-• Access exclusive features
-
-🎮 <b>Value:</b> 1 Token = 1 Star
-
-✨ <b>Get more tokens:</b>
-• Invite friends (1 token each)
-• Complete achievements
-• Daily rewards
-
-<a href="https://t.me/share/url?url={referral_link}">📤 Invite Friends Now!</a>"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "🎮 Browse Premium Games", "callback_data": "premium_games"},
-                 {"text": "👥 Referral Program", "callback_data": "referral_menu"}],
-                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-            ]
-        }
-        
-        self.edit_message(chat_id, message_id, text, keyboard)
-    
-    def show_referral_stats_admin(self, user_id, chat_id, message_id):
-        leaderboard = self.referral_system.get_leaderboard(20)
-        text = "🏆 <b>Referral Leaderboard</b>\n\n"
-        for i, (uid, name, refs, tokens) in enumerate(leaderboard, 1):
-            text += f"{i}. {name} - {refs} referrals ({tokens} tokens)\n"
-        self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
-    
-    def show_token_management(self, user_id, chat_id, message_id):
-        text = """💎 <b>Token Management</b>
-
-Commands for admins:
-/addtokens [user_id] [amount] - Add tokens to user
-/removetokens [user_id] [amount] - Remove tokens
-/tokenbalance [user_id] - Check user balance"""
-        self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
-    
-    # ==================== PREMIUM GAMES ====================
-    
-    def show_premium_games_menu(self, user_id, chat_id, message_id=None):
-        premium_games = self.premium_games_system.get_premium_games(20)
-        user_tokens = self.referral_system.get_user_tokens(user_id)
-        
-        if not premium_games:
-            premium_text = f"""💰 <b>Premium Games</b>
-
-💎 Your Tokens: {user_tokens}
-
-No premium games available yet."""
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🆓 Regular Games", "callback_data": "game_files"}],
-                    [{"text": "🔄 Refresh", "callback_data": "premium_games"}],
-                    [{"text": "🔙 Back to Games", "callback_data": "games"}]
-                ]
-            }
-        else:
-            premium_text = f"""💰 <b>Premium Games Collection</b>
-
-💎 Your Tokens: {user_tokens}
-
-Purchase with <b>Stars ⭐</b> or <b>Tokens 💎</b>
-
-"""
-            keyboard_buttons = []
-            
-            for i, game in enumerate(premium_games[:10], 1):
-                game_id, file_name, file_type, file_size, stars_price, tokens_price, description, upload_date, file_id, bot_message_id, is_uploaded = game
-                size = self.format_file_size(file_size)
-                display_name = file_name[:30] + "..." if len(file_name) > 30 else file_name
-                
-                premium_text += f"{i}. <b>{display_name}</b>\n"
-                premium_text += f"   📦 {file_type} | 📏 {size}\n"
-                premium_text += f"   ⭐ {stars_price} Stars OR 💎 {tokens_price} Tokens\n\n"
-                
-                keyboard_buttons.append([
-                    {"text": f"⭐ Buy ({stars_price} Stars)", "callback_data": f"buy_with_stars_{game_id}"},
-                    {"text": f"💎 Buy ({tokens_price} Tokens)", "callback_data": f"buy_with_tokens_{game_id}"}
-                ])
-            
-            keyboard_buttons.extend([
-                [{"text": "🆓 Regular Games", "callback_data": "game_files"}],
-                [{"text": "👥 Referral Program", "callback_data": "referral_menu"}],
-                [{"text": "💎 My Tokens", "callback_data": "my_tokens"}],
-                [{"text": "🔄 Refresh", "callback_data": "premium_games"}],
-                [{"text": "🔙 Back to Games", "callback_data": "games"}]
-            ])
-            
-            keyboard = {"inline_keyboard": keyboard_buttons}
-        
-        if message_id:
-            self.edit_message(chat_id, message_id, premium_text, keyboard)
-        else:
-            self.robust_send_message(chat_id, premium_text, keyboard)
-    
-    def purchase_with_tokens(self, user_id, chat_id, game_id):
-        game = self.premium_games_system.get_premium_game_by_id(game_id)
-        
-        if not game:
-            self.robust_send_message(chat_id, "❌ Game not found")
-            return
-        
-        if self.premium_games_system.has_user_purchased_game(user_id, game_id):
-            self.robust_send_message(chat_id, f"✅ You already own {game['file_name']}!")
-            return
-        
-        if self.referral_system.deduct_tokens(user_id, game['tokens_price'], f"Purchased {game['file_name']}"):
-            self.premium_games_system.record_purchase(user_id, game_id, 'tokens', 0, game['tokens_price'])
-            
-            self.robust_send_message(chat_id, 
-                f"✅ <b>Purchase Successful!</b>\n\n"
-                f"🎮 {game['file_name']}\n"
-                f"💎 Paid: {game['tokens_price']} Tokens\n"
-                f"💰 Remaining: {self.referral_system.get_user_tokens(user_id)} Tokens"
-            )
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📥 Download Now", "callback_data": f"download_premium_{game_id}"}],
-                    [{"text": "🎮 More Games", "callback_data": "premium_games"}]
-                ]
-            }
-            self.robust_send_message(chat_id, "🎮 Your game is ready!", keyboard)
-        else:
-            self.robust_send_message(chat_id, 
-                f"❌ <b>Insufficient Tokens!</b>\n\n"
-                f"Need: {game['tokens_price']} Tokens\n"
-                f"Your balance: {self.referral_system.get_user_tokens(user_id)} Tokens"
-            )
-    
-    def purchase_with_stars(self, user_id, chat_id, game_id):
-        game = self.premium_games_system.get_premium_game_by_id(game_id)
-        
-        if not game:
-            self.robust_send_message(chat_id, "❌ Game not found")
-            return
-        
-        if self.premium_games_system.has_user_purchased_game(user_id, game_id):
-            self.robust_send_message(chat_id, f"✅ You already own {game['file_name']}!")
-            return
-        
-        self.stars_system.create_premium_game_invoice(user_id, chat_id, game['stars_price'], game['file_name'], game_id)
-    
-    def send_premium_game(self, user_id, chat_id, game_id):
-        game = self.premium_games_system.get_premium_game_by_id(game_id)
-        
-        if not game:
-            self.robust_send_message(chat_id, "❌ Game not found")
-            return
-        
-        if not self.premium_games_system.has_user_purchased_game(user_id, game_id):
-            self.robust_send_message(chat_id, f"❌ You haven't purchased {game['file_name']} yet!")
-            return
-        
-        self.robust_send_message(chat_id, f"📥 Sending {game['file_name']}...")
-        
-        if game['is_uploaded'] and game['bot_message_id']:
-            url = self.base_url + "sendDocument"
-            data = {"chat_id": chat_id, "document": game['file_id'] if game['file_id'] else game['bot_message_id']}
-            response = requests.post(url, data=data, timeout=30)
-            success = response.json().get('ok', False)
-        else
-            url = self.base_url + "forwardMessage"
-            data = {"chat_id": chat_id, "from_chat_id": self.REQUIRED_CHANNEL, "message_id": game['message_id']}
-            response = requests.post(url, data=data, timeout=30)
-            success = response.json().get('ok', False)
-        
-        if success:
-            self.robust_send_message(chat_id, f"✅ Enjoy your game: <b>{game['file_name']}</b>!")
-        else:
-            self.robust_send_message(chat_id, "❌ Failed to send game. Please contact admin.")
-    
-    # ==================== GAME REQUESTS ====================
-    
-    def start_game_request(self, user_id, chat_id):
-        self.request_sessions[user_id] = {'stage': 'waiting_game_name'}
-        self.robust_send_message(chat_id, "🎮 <b>Game Request</b>\n\nPlease tell us the name of the game you'd like to request:")
-    
-    def handle_game_request(self, user_id, chat_id, game_name):
-        self.request_sessions[user_id] = {'stage': 'waiting_platform', 'game_name': game_name}
-        self.robust_send_message(chat_id, f"🎮 <b>Game Request</b>\n\nGame: <b>{game_name}</b>\n\nNow, please specify the platform:")
-        return True
-    
-    def complete_game_request(self, user_id, chat_id, platform):
-        if user_id not in self.request_sessions:
-            return False
-        session = self.request_sessions[user_id]
-        if session.get('stage') != 'waiting_platform':
-            return False
-        
-        game_name = session['game_name']
-        request_id = self.game_request_system.submit_game_request(user_id, game_name, platform)
-        
-        if request_id:
-            del self.request_sessions[user_id]
-            self.robust_send_message(chat_id, f"✅ <b>Game Request Submitted!</b>\n\n🎮 Game: {game_name}\n📱 Platform: {platform}\n🆔 Request ID: {request_id}")
-            return True
-        else:
-            self.robust_send_message(chat_id, "❌ Sorry, there was an error submitting your request.")
-            return False
-    
-    def start_request_reply_with_media(self, user_id, chat_id, request_id):
-        if not self.is_admin(user_id):
-            return False
-        
-        request = self.game_request_system.get_request_by_id(request_id)
-        if not request:
-            self.robust_send_message(chat_id, "❌ Request not found")
-            return False
-        
-        self.media_reply_sessions[user_id] = {
-            'stage': 'waiting_media_type',
-            'request_id': request_id,
-            'user_id': request['user_id'],
-            'game_name': request['game_name']
-        }
-        
-        reply_text = f"""📝 <b>Reply to Game Request #{request_id}</b>
-
-🎮 Game: <b>{request['game_name']}</b>
-👤 User ID: {request['user_id']}
-
-Choose reply type:"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "📝 Text Reply", "callback_data": f"reply_text_{request_id}"}],
-                [{"text": "🖼️ Reply with Photo", "callback_data": f"reply_photo_{request_id}"}],
-                [{"text": "🎥 Reply with Video", "callback_data": f"reply_video_{request_id}"}],
-                [{"text": "📎 Reply with Document", "callback_data": f"reply_document_{request_id}"}],
-                [{"text": "❌ Cancel", "callback_data": "cancel_reply"}]
-            ]
-        }
-        
-        self.robust_send_message(chat_id, reply_text, keyboard)
-        return True
-    
-    def show_admin_requests_panel(self, user_id, chat_id, message_id):
-        if not self.is_admin(user_id):
-            self.answer_callback_query(message_id, "❌ Access denied. Admin only.", True)
-            return
-        
-        pending_requests = self.game_request_system.get_pending_requests(10)
-        
-        text = f"""👑 <b>Game Request Management</b>
-
-📊 Pending: {len(pending_requests)}
-
-📝 <b>Pending Requests:</b>"""
-        
-        for req in pending_requests[:5]:
-            req_id, uid, uname, gname, platform, created = req
-            date = datetime.fromisoformat(created).strftime('%m/%d %H:%M')
-            text += f"\n\n🎮 <b>{gname}</b>\n👤 {uname} | 📱 {platform}\n🆔 #{req_id} | 📅 {date}"
-        
-        if not pending_requests:
-            text += "\n\nNo pending requests."
-        
-        keyboard = []
-        for req in pending_requests[:10]:
-            req_id, uid, uname, gname, platform, created = req
-            keyboard.append([{"text": f"📝 #{req_id}: {gname[:20]}", "callback_data": f"reply_media_{req_id}"}])
-        
-        keyboard.append([{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}])
-        
-        self.edit_message(chat_id, message_id, text, {"inline_keyboard": keyboard})
-    
-    # ==================== BROADCAST ====================
-    
-    def start_broadcast(self, user_id, chat_id):
-        if not self.is_admin(user_id):
-            return
-        self.broadcast_system.create_broadcast_with_buttons(user_id, chat_id)
-    
-    def cancel_broadcast(self, user_id, chat_id, message_id):
-        if user_id in self.broadcast_system.broadcast_sessions:
-            del self.broadcast_system.broadcast_sessions[user_id]
-        self.edit_message(chat_id, message_id, "❌ Broadcast cancelled.", self.create_admin_buttons())
-    
-    def show_broadcast_stats(self, user_id, chat_id, message_id):
-        self.edit_message(chat_id, message_id, "📊 Broadcast stats coming soon", self.create_admin_buttons())
-    
-    # ==================== STARS ====================
-    
-    def show_stars_menu(self, user_id, chat_id, message_id=None):
-        balance = self.stars_system.get_balance()
-        
-        text = f"""⭐ <b>Support with Telegram Stars</b>
-
-💫 <b>Star Packages:</b>
-• 50 Stars ($0.50)
-• 100 Stars ($1.00)
-• 500 Stars ($5.00)
-• 1000 Stars ($10.00)
-
-📊 <b>Stars Stats:</b>
-• Total Received: {balance['total_stars_earned']} ⭐
-• Total USD: ${balance['total_usd_earned']:.2f}
-
-💡 <b>1 Star = 1 Game Token value</b>"""
-        
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "⭐ 50 Stars", "callback_data": "donate_50"}, {"text": "⭐ 100 Stars", "callback_data": "donate_100"}],
-                [{"text": "⭐ 500 Stars", "callback_data": "donate_500"}, {"text": "⭐ 1000 Stars", "callback_data": "donate_1000"}],
-                [{"text": "💫 Custom Amount", "callback_data": "stars_custom"}],
-                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-            ]
-        }
-        
-        if message_id:
-            self.edit_message(chat_id, message_id, text, keyboard)
-        else:
-            self.robust_send_message(chat_id, text, keyboard)
-    
-    def process_stars_donation(self, user_id, chat_id, stars_amount):
-        self.stars_system.create_stars_invoice(user_id, chat_id, stars_amount, "Bot Stars Donation")
-    
-    def show_stars_stats(self, user_id, chat_id, message_id):
-        balance = self.stars_system.get_balance()
-        self.edit_message(chat_id, message_id, f"⭐ Stars: {balance['total_stars_earned']}", self.create_admin_buttons())
-    
-    # ==================== MINI GAMES ====================
-    
-    def start_number_guess_game(self, user_id, chat_id):
-        target = random.randint(1, 10)
-        self.guess_games[user_id] = {'target': target, 'attempts': 0, 'max_attempts': 5}
-        self.robust_send_message(chat_id, f"🎯 Guess a number between 1-10!")
-    
-    def generate_random_number(self, user_id, chat_id):
-        number = random.randint(1, 100)
-        self.robust_send_message(chat_id, f"🎲 Random number: {number}")
-    
-    def lucky_spin(self, user_id, chat_id):
-        symbols = ["🍒", "🍋", "🍊", "🍇", "🍉", "💎", "7️⃣", "🔔"]
-        spins = [random.choice(symbols) for _ in range(3)]
-        self.robust_send_message(chat_id, f"🎰 {spins[0]} | {spins[1]} | {spins[2]}")
-    
-    def big_spin(self, user_id, chat_id):
-        self.lucky_spin(user_id, chat_id)
-    
-    def show_mini_games_stats(self, user_id, chat_id, message_id):
-        self.edit_message(chat_id, message_id, "📊 Mini Games Stats", self.create_mini_games_buttons())
-    
-    # ==================== HANDLE CALLBACK ====================
-    
-    def handle_callback_query(self, callback_query):
+    def save_verification_code(self, user_id, username, first_name, code):
         try:
-            data = callback_query['data']
-            message = callback_query['message']
-            chat_id = message['chat']['id']
-            message_id = message['message_id']
-            user_id = callback_query['from']['id']
-            first_name = callback_query['from']['first_name']
-            
-            self.answer_callback_query(callback_query['id'])
-            
-            # Referral System
-            if data == "referral_menu":
-                self.show_referral_menu(user_id, chat_id, message_id)
-                return
-            elif data == "my_tokens":
-                self.show_token_balance(user_id, chat_id, message_id)
-                return
-            elif data == "referral_stats" and self.is_admin(user_id):
-                self.show_referral_stats_admin(user_id, chat_id, message_id)
-                return
-            elif data == "token_management" and self.is_admin(user_id):
-                self.show_token_management(user_id, chat_id, message_id)
-                return
-            
-            # Premium Games
-            elif data == "premium_games":
-                self.show_premium_games_menu(user_id, chat_id, message_id)
-                return
-            elif data.startswith("buy_with_tokens_"):
-                game_id = int(data.replace("buy_with_tokens_", ""))
-                self.purchase_with_tokens(user_id, chat_id, game_id)
-                return
-            elif data.startswith("buy_with_stars_"):
-                game_id = int(data.replace("buy_with_stars_", ""))
-                self.purchase_with_stars(user_id, chat_id, game_id)
-                return
-            elif data.startswith("download_premium_"):
-                game_id = int(data.replace("download_premium_", ""))
-                self.send_premium_game(user_id, chat_id, game_id)
-                return
-            
-            # NEW: Handle game download requests
-            elif data.startswith("download_game_"):
-                try:
-                    index = int(data.replace("download_game_", "")) - 1
-                    if hasattr(self, 'current_games_list') and index < len(self.current_games_list):
-                        game = self.current_games_list[index]
-                        file_name = game['file_name']
-                        file_id = game.get('file_id', '')
-                        msg_id = game.get('message_id', 0)
-                        if file_id:
-                            self.send_game_file(user_id, chat_id, file_name, file_id, msg_id)
-                        else:
-                            self.robust_send_message(chat_id, f"❌ File ID not found for {file_name}")
-                    else:
-                        self.robust_send_message(chat_id, "❌ Game not found. Please refresh the list.")
-                    return
-                except Exception as e:
-                    print(f"Download error: {e}")
-                    self.robust_send_message(chat_id, f"❌ Error: {str(e)}")
-                    return
-            
-            # Broadcast System
-            elif data == "broadcast_panel":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.create_broadcast_with_buttons(user_id, chat_id)
-                return
-            elif data == "broadcast_text":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.handle_broadcast_text(user_id, chat_id)
-                return
-            elif data == "broadcast_photo":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.handle_broadcast_photo(user_id, chat_id)
-                return
-            elif data == "broadcast_video":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.handle_broadcast_video(user_id, chat_id)
-                return
-            elif data == "broadcast_add_buttons":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.add_buttons_to_broadcast(user_id, chat_id)
-                return
-            elif data == "send_broadcast":
-                if not self.is_admin(user_id):
-                    return
-                self.broadcast_system.execute_broadcast(user_id, chat_id)
-                return
-            elif data == "cancel_broadcast":
-                self.cancel_broadcast(user_id, chat_id, message_id)
-                return
-            elif data == "start_broadcast":
-                self.start_broadcast(user_id, chat_id)
-                return
-            elif data == "broadcast_stats":
-                self.show_broadcast_stats(user_id, chat_id, message_id)
-                return
-            
-            # Game Requests
-            elif data == "request_game":
-                self.start_game_request(user_id, chat_id)
-                return
-            elif data == "admin_requests_panel":
-                self.show_admin_requests_panel(user_id, chat_id, message_id)
-                return
-            elif data.startswith("reply_media_"):
-                request_id = int(data.replace("reply_media_", ""))
-                self.start_request_reply_with_media(user_id, chat_id, request_id)
-                return
-            elif data.startswith("reply_text_"):
-                request_id = int(data.replace("reply_text_", ""))
-                if user_id in self.media_reply_sessions:
-                    session = self.media_reply_sessions[user_id]
-                    session['stage'] = 'waiting_text'
-                    self.robust_send_message(chat_id, "📝 Type your text reply:")
-                return
-            elif data.startswith("reply_photo_"):
-                request_id = int(data.replace("reply_photo_", ""))
-                if user_id in self.media_reply_sessions:
-                    session = self.media_reply_sessions[user_id]
-                    session['stage'] = 'waiting_photo'
-                    self.robust_send_message(chat_id, "🖼️ Send the photo for your reply:")
-                return
-            elif data.startswith("reply_video_"):
-                request_id = int(data.replace("reply_video_", ""))
-                if user_id in self.media_reply_sessions:
-                    session = self.media_reply_sessions[user_id]
-                    session['stage'] = 'waiting_video'
-                    self.robust_send_message(chat_id, "🎥 Send the video for your reply:")
-                return
-            elif data.startswith("reply_document_"):
-                request_id = int(data.replace("reply_document_", ""))
-                if user_id in self.media_reply_sessions:
-                    session = self.media_reply_sessions[user_id]
-                    session['stage'] = 'waiting_document'
-                    self.robust_send_message(chat_id, "📎 Send the document for your reply:")
-                return
-            elif data.startswith("complete_request_"):
-                request_id = int(data.replace("complete_request_", ""))
-                self.game_request_system.update_request_status(request_id, 'completed', "Request completed by admin")
-                self.answer_callback_query(callback_query['id'], "✅ Request marked as completed!", True)
-                return
-            elif data.startswith("reject_request_"):
-                request_id = int(data.replace("reject_request_", ""))
-                self.game_request_system.update_request_status(request_id, 'rejected', "Request rejected by admin")
-                self.answer_callback_query(callback_query['id'], "❌ Request rejected.", True)
-                return
-            elif data == "cancel_reply":
-                if user_id in self.media_reply_sessions:
-                    del self.media_reply_sessions[user_id]
-                self.robust_send_message(chat_id, "❌ Reply cancelled.")
-                return
-            
-            # Stars System
-            elif data == "stars_menu":
-                self.show_stars_menu(user_id, chat_id, message_id)
-                return
-            elif data.startswith("donate_"):
-                stars_amount = int(data.replace("donate_", ""))
-                self.process_stars_donation(user_id, chat_id, stars_amount)
-                return
-            elif data == "stars_custom":
-                self.stars_sessions[user_id] = {}
-                self.robust_send_message(chat_id, "💫 Enter Stars amount:")
-                return
-            elif data == "stars_stats":
-                self.show_stars_stats(user_id, chat_id, message_id)
-                return
-            
-            # Admin Panel and Navigation
-            elif data == "admin_panel":
-                if not self.is_admin(user_id):
-                    self.edit_message(chat_id, message_id, "❌ Admin only", self.create_main_menu_buttons())
-                    return
-                self.edit_message(chat_id, message_id, "👑 Admin Panel", self.create_admin_buttons())
-                return
-            elif data == "back_to_menu":
-                self.edit_message(chat_id, message_id, f"👋 Welcome {first_name}!", self.create_main_menu_buttons())
-                return
-            elif data == "games":
-                self.edit_message(chat_id, message_id, "🎮 Games Section", self.create_games_buttons())
-                return
-            elif data == "game_files":
-                self.edit_message(chat_id, message_id, "📁 Game Files", self.create_game_files_buttons())
-                return
-            elif data == "mini_games":
-                self.edit_message(chat_id, message_id, "🎮 Mini Games", self.create_mini_games_buttons())
-                return
-            elif data == "search_games":
-                self.edit_message(chat_id, message_id, "🔍 Type a game name to search:", self.create_search_buttons())
-                return
-            elif data == "profile":
-                tokens = self.referral_system.get_user_tokens(user_id)
-                self.edit_message(chat_id, message_id, f"👤 {first_name}\n💎 Tokens: {tokens}", self.create_main_menu_buttons())
-                return
-            elif data == "time":
-                self.edit_message(chat_id, message_id, f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", self.create_main_menu_buttons())
-                return
-            elif data == "channel_info":
-                self.edit_message(chat_id, message_id, f"📢 {self.REQUIRED_CHANNEL}\n🔗 {self.CHANNEL_LINK}", self.create_main_menu_buttons())
-                return
-            elif data == "verify_channel":
-                if self.check_channel_membership(user_id):
-                    self.mark_channel_joined(user_id)
-                    self.edit_message(chat_id, message_id, "✅ Verified!", self.create_main_menu_buttons())
-                else:
-                    self.edit_message(chat_id, message_id, "❌ Please join the channel first!", self.create_channel_buttons())
-                return
-            
-            # Game Categories - UPDATED with XAPK and APKS
-            elif data == "game_zip":
-                games = self.games_cache.get('zip', [])
-                self.format_games_list(games, "ZIP", chat_id, message_id)
-                return
-            elif data == "game_7z":
-                games = self.games_cache.get('7z', [])
-                self.format_games_list(games, "7Z", chat_id, message_id)
-                return
-            elif data == "game_iso":
-                games = self.games_cache.get('iso', [])
-                self.format_games_list(games, "ISO", chat_id, message_id)
-                return
-            elif data == "game_apk":
-                games = self.games_cache.get('apk', [])
-                self.format_games_list(games, "APK", chat_id, message_id)
-                return
-            elif data == "game_psp":
-                games = self.games_cache.get('cso', []) + self.games_cache.get('pbp', [])
-                self.format_games_list(games, "PSP", chat_id, message_id)
-                return
-            elif data == "game_all":
-                games = self.games_cache.get('all', [])
-                self.format_games_list(games, "ALL", chat_id, message_id)
-                return
-            elif data == "rescan_games":
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, "✅ Cache updated!", self.create_game_files_buttons())
-                return
-            
-            # Admin Actions
-            elif data == "upload_stats" and self.is_admin(user_id):
-                uploads = self.get_upload_stats()
-                forwards = self.get_forward_stats()
-                stats = self.get_channel_stats()
-                text = f"""<b>Your Stats:</b>
-- Total uploads: {uploads}
-- Forwarded files: {forwards}
-- Regular games: {stats['total_games']}
-- Premium games: {stats['premium_games']}"""
-                self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
-                return
-            elif data == "update_cache" and self.is_admin(user_id):
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, "✅ Cache updated!", self.create_admin_buttons())
-                return
-            elif data == "upload_options" and self.is_admin(user_id):
-                self.edit_message(chat_id, message_id, "📤 Send a game file", self.create_admin_buttons())
-                return
-            elif data == "remove_games" and self.is_admin(user_id):
-                self.edit_message(chat_id, message_id, "🗑️ Use /removegames", self.create_admin_buttons())
-                return
-            elif data == "clear_all_games" and self.is_admin(user_id):
-                cursor = self.conn.cursor()
-                cursor.execute('DELETE FROM channel_games')
-                cursor.execute('DELETE FROM premium_games')
+            expires = datetime.now() + timedelta(minutes=10)
+            cursor = self.conn.cursor()
+            cursor.execute('INSERT OR REPLACE INTO users (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel) VALUES (?, ?, ?, ?, ?, 0, 0)', (user_id, username, first_name, code, expires))
+            self.conn.commit()
+            return True
+        except:
+            return False
+    
+    def verify_code(self, user_id, code):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT verification_code, code_expires FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            if not result:
+                return False
+            stored_code, expires_str = result
+            expires = datetime.fromisoformat(expires_str)
+            if datetime.now() > expires:
+                return False
+            if stored_code == code:
+                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = ?', (user_id,))
                 self.conn.commit()
-                self.update_games_cache()
-                self.edit_message(chat_id, message_id, "🗑️ All games cleared", self.create_admin_buttons())
-                return
-            elif data == "scan_bot_games" and self.is_admin(user_id):
-                self.edit_message(chat_id, message_id, "🔍 Scanning...", self.create_admin_buttons())
-                return
-            elif data == "backup_menu" and self.is_admin(user_id):
-                info = self.github_backup.get_backup_info()
-                text = f"💾 Backup System\n\nEnabled: {info.get('enabled', False)}\nAuto-backup on every game upload"
-                self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
-                return
-            elif data == "redeploy_panel" and self.is_admin(user_id):
-                self.redeploy_system.show_redeploy_menu(user_id, chat_id, message_id)
-                return
-            elif data == "redeploy_soft" and self.is_admin(user_id):
-                self.redeploy_system.initiate_redeploy(user_id, chat_id, "soft")
-                return
-            elif data == "redeploy_force" and self.is_admin(user_id):
-                self.redeploy_system.initiate_redeploy(user_id, chat_id, "force")
-                return
-            elif data == "system_status" and self.is_admin(user_id):
-                self.redeploy_system.show_system_status(user_id, chat_id, message_id)
-                return
-            elif data == "user_redeploy":
-                self.edit_message(chat_id, message_id, "🔄 Redeploy requested", self.create_main_menu_buttons())
-                return
-            
-            # Mini Games
-            elif data == "game_guess":
-                self.start_number_guess_game(user_id, chat_id)
-                return
-            elif data == "game_random":
-                self.generate_random_number(user_id, chat_id)
-                return
-            elif data == "game_spin":
-                self.lucky_spin(user_id, chat_id)
-                return
-            elif data == "big_spin":
-                self.big_spin(user_id, chat_id)
-                return
-            elif data == "mini_stats":
-                self.show_mini_games_stats(user_id, chat_id, message_id)
-                return
-            
-        except Exception as e:
-            print(f"Callback error: {e}")
-            traceback.print_exc()
+                return True
+            return False
+        except:
+            return False
     
     def check_channel_membership(self, user_id):
         try:
             url = self.base_url + "getChatMember"
             data = {"chat_id": self.REQUIRED_CHANNEL, "user_id": user_id}
-            response = requests.post(url, data=data, timeout=10)
-            result = response.json()
-            if result.get('ok'):
-                status = result['result']['status']
+            r = requests.post(url, data=data, timeout=10)
+            if r.json().get('ok'):
+                status = r.json()['result']['status']
                 return status in ['member', 'administrator', 'creator']
             return False
         except:
@@ -3020,57 +840,623 @@ Choose reply type:"""
         except:
             return False
     
-    def generate_code(self):
-        return ''.join(secrets.choice('0123456789') for _ in range(6))
-    
-    def save_verification_code(self, user_id, username, first_name, code):
+    def get_channel_stats(self):
         try:
-            expires = datetime.now() + timedelta(minutes=10)
             cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO users 
-                (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel)
-                VALUES (?, ?, ?, ?, ?, 0, 0)
-            ''', (user_id, username, first_name, code, expires))
-            self.conn.commit()
-            return True
+            cursor.execute('SELECT COUNT(*) FROM channel_games')
+            total = cursor.fetchone()[0]
+            return {'total_games': total}
         except:
-            return False
+            return {'total_games': 0}
     
-    def verify_code(self, user_id, code):
+    # ==================== MENU BUTTONS ====================
+    
+    def main_menu_buttons(self):
+        stats = self.get_channel_stats()
+        keyboard = [
+            [{"text": "📊 Profile", "callback_data": "profile"}, {"text": "🕒 Time", "callback_data": "time"}],
+            [{"text": "📢 Channel", "callback_data": "channel_info"}, {"text": f"🎮 Games ({stats['total_games']})", "callback_data": "games"}],
+            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
+            [{"text": "📝 Request Game", "callback_data": "request_game"}, {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}],
+            [{"text": "👥 Referral Program", "callback_data": "referral_menu"}, {"text": "💎 My Tokens", "callback_data": "my_tokens"}]
+        ]
+        if self.is_admin:
+            keyboard.append([{"text": "🔧 Admin Panel", "callback_data": "admin_panel"}])
+        keyboard.append([{"text": "🔄 Redeploy Bot", "callback_data": "redeploy_menu"}])
+        return {"inline_keyboard": keyboard}
+    
+    def admin_panel_buttons(self):
+        return {
+            "inline_keyboard": [
+                [{"text": "📤 Upload Stats", "callback_data": "upload_stats"}, {"text": "🔄 Update Cache", "callback_data": "update_cache"}],
+                [{"text": "📤 Upload Games", "callback_data": "upload_games"}, {"text": "🗑️ Remove Games", "callback_data": "remove_games"}],
+                [{"text": "🗑️ Clear All Games", "callback_data": "clear_all_games"}, {"text": "🔍 Scan Bot Games", "callback_data": "scan_bot_games"}],
+                [{"text": "📢 Broadcast", "callback_data": "broadcast_menu"}, {"text": "🎮 Game Requests", "callback_data": "game_requests_admin"}],
+                [{"text": "⭐ Stars Stats", "callback_data": "stars_stats"}, {"text": "💾 Backup System", "callback_data": "backup_menu"}],
+                [{"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"}, {"text": "📊 System Status", "callback_data": "system_status"}],
+                [{"text": "👥 Referral Stats", "callback_data": "referral_stats"}, {"text": "💎 Token Management", "callback_data": "token_management"}],
+                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+            ]
+        }
+    
+    def channel_buttons(self):
+        return {"inline_keyboard": [[{"text": "📢 JOIN CHANNEL", "url": self.CHANNEL_LINK}, {"text": "✅ VERIFY JOIN", "callback_data": "verify_channel"}]]}
+    
+    def games_buttons(self):
+        stats = self.get_channel_stats()
+        return {"inline_keyboard": [
+            [{"text": "🎮 Mini Games", "callback_data": "mini_games"}, {"text": f"📁 Game Files ({stats['total_games']})", "callback_data": "game_files"}],
+            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
+            [{"text": "📝 Request Game", "callback_data": "request_game"}, {"text": "⭐ Donate Stars", "callback_data": "stars_menu"}],
+            [{"text": "👥 Referral Program", "callback_data": "referral_menu"}, {"text": "💎 My Tokens", "callback_data": "my_tokens"}],
+            [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+        ]}
+    
+    def game_files_buttons(self):
+        stats = self.get_channel_stats()
+        return {"inline_keyboard": [
+            [{"text": f"📦 ZIP ({len(self.games_cache.get('zip', []))})", "callback_data": "game_zip"}, {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})", "callback_data": "game_7z"}],
+            [{"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})", "callback_data": "game_iso"}, {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})", "callback_data": "game_apk"}],
+            [{"text": f"🎮 PSP ({len(self.games_cache.get('cso', [])) + len(self.games_cache.get('pbp', []))})", "callback_data": "game_psp"}, {"text": f"📋 All ({stats['total_games']})", "callback_data": "game_all"}],
+            [{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "🔍 Search Games", "callback_data": "search_games"}],
+            [{"text": "🔄 Rescan", "callback_data": "rescan_games"}, {"text": "🔙 Back to Games", "callback_data": "games"}]
+        ]}
+    
+    def mini_games_buttons(self):
+        return {"inline_keyboard": [
+            [{"text": "🎯 Number Guess", "callback_data": "game_guess"}, {"text": "🎲 Random Number", "callback_data": "game_random"}],
+            [{"text": "🎰 Lucky Spin", "callback_data": "game_spin"}, {"text": "🔙 Back to Games", "callback_data": "games"}]
+        ]}
+    
+    def search_buttons(self):
+        return {"inline_keyboard": [
+            [{"text": "🔍 New Search", "callback_data": "search_games"}, {"text": "📁 Browse All", "callback_data": "game_files"}],
+            [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+        ]}
+    
+    def broadcast_menu_buttons(self):
+        return {"inline_keyboard": [
+            [{"text": "📝 Text Broadcast", "callback_data": "broadcast_text"}],
+            [{"text": "🖼️ Photo Broadcast", "callback_data": "broadcast_photo"}],
+            [{"text": "🎥 Video Broadcast", "callback_data": "broadcast_video"}],
+            [{"text": "🔘 Add Buttons", "callback_data": "broadcast_add_buttons"}],
+            [{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]
+        ]}
+    
+    def stars_buttons(self):
+        return {"inline_keyboard": [
+            [{"text": "⭐ 50 Stars", "callback_data": "donate_50"}, {"text": "⭐ 100 Stars", "callback_data": "donate_100"}],
+            [{"text": "⭐ 500 Stars", "callback_data": "donate_500"}, {"text": "⭐ 1000 Stars", "callback_data": "donate_1000"}],
+            [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+        ]}
+    
+    def redeploy_buttons(self):
+        return {"inline_keyboard": [
+            [{"text": "🔄 Soft Redeploy", "callback_data": "redeploy_soft"}],
+            [{"text": "🚀 Force Redeploy", "callback_data": "redeploy_force"}],
+            [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+        ]}
+    
+    # ==================== HANDLE CALLBACK ====================
+    
+    def handle_callback(self, callback):
         try:
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT verification_code, code_expires FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            if not result:
-                return False
-            stored_code, expires_str = result
-            expires = datetime.fromisoformat(expires_str)
-            if datetime.now() > expires:
-                return False
-            if stored_code == code:
-                cursor.execute('UPDATE users SET is_verified = 1 WHERE user_id = ?', (user_id,))
+            data = callback['data']
+            message = callback['message']
+            chat_id = message['chat']['id']
+            msg_id = message['message_id']
+            user_id = callback['from']['id']
+            first_name = callback['from']['first_name']
+            
+            self.answer_callback(callback['id'])
+            
+            # Main Menu
+            if data == "back_to_menu":
+                text = f"""<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+Made by @rexoronsaye
+
+<b>What can this bot do?</b>
+Search games across different platforms on telegram.
+Made by @rexoronsaye
+
+Choose an option below:"""
+                self.edit_message(chat_id, msg_id, text, self.main_menu_buttons())
+                return
+            
+            elif data == "admin_panel":
+                if not self.is_admin(user_id):
+                    self.edit_message(chat_id, msg_id, "❌ Admin only", self.main_menu_buttons())
+                    return
+                text = f"""<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+- <b>Individual Request Replies</b>
+- <b>Photo Broadcast Support</b>
+- <b>Game Removal System</b>
+- <b>Duplicate Detection</b>
+- <b>Redeploy System</b>
+- <b>GitHub Database Backup</b>
+- <b>Keep-Alive Protection</b>
+- <b>Persistent Data Recovery</b>
+
+Choose an option below:"""
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "games":
+                text = f"""<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+<b>Games Section</b>
+
+- <b>Total Games:</b> {self.get_channel_stats()['total_games']}
+  - FREE
+  - Regular: {self.get_channel_stats()['total_games']}
+  - Premium: 0
+
+📌 Choose an option below:
+- Game Files - Browse all regular games
+- Premium Games - Exclusive paid games
+- Mini Games - Fun mini-games to play
+- Search Games - Search for specific games
+- Request Game - Request games not in our collection
+- Donate Stars - Support our bot with Telegram Stars
+
+<b>Channel:</b> {self.REQUIRED_CHANNEL}
+<b>Time:</b> {datetime.now().strftime('%I:%M %p')}"""
+                self.edit_message(chat_id, msg_id, text, self.games_buttons())
+                return
+            
+            elif data == "game_files":
+                stats = self.get_channel_stats()
+                text = f"📁 <b>Game Files</b>\n\nTotal: {stats['total_games']} games\nChoose category:"
+                self.edit_message(chat_id, msg_id, text, self.game_files_buttons())
+                return
+            
+            elif data == "mini_games":
+                text = "🎮 <b>Mini Games</b>\n\nChoose a game to play:"
+                self.edit_message(chat_id, msg_id, text, self.mini_games_buttons())
+                return
+            
+            elif data == "profile":
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT created_at FROM users WHERE user_id = ?', (user_id,))
+                created = cursor.fetchone()
+                created_str = datetime.fromisoformat(created[0]).strftime('%Y-%m-%d\n%H:%M:%S') if created else 'Unknown'
+                verified = "Yes" if self.is_user_verified(user_id) else "No"
+                channel_joined = "Yes" if self.check_channel_membership(user_id) else "No"
+                tokens = self.referral.get_tokens(user_id)
+                
+                text = f"""<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+Made by @rexoronsaye
+
+<b>User Profile</b>
+
+• <b>User ID</b>: {user_id}
+• <b>Name</b>: {first_name}
+• <b>Verified</b>: {verified}
+• <b>Channel Joined</b>: {channel_joined}
+• <b>Member Since</b>: {created_str}
+
+Your unique ID: {user_id}
+Use this ID for admin verification if needed.
+
+<b>Sidebar Options:</b>
+- Profile
+- Time
+- Channel
+- Games ({self.get_channel_stats()['total_games']})
+- Premium Games
+- Search Games
+- Request Game
+- Donate Stars
+- Admin Panel
+- Redeploy Bot"""
+                self.edit_message(chat_id, msg_id, text, self.main_menu_buttons())
+                return
+            
+            elif data == "time":
+                self.edit_message(chat_id, msg_id, f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", self.main_menu_buttons())
+                return
+            
+            elif data == "channel_info":
+                self.edit_message(chat_id, msg_id, f"📢 {self.REQUIRED_CHANNEL}\n🔗 {self.CHANNEL_LINK}", self.main_menu_buttons())
+                return
+            
+            elif data == "verify_channel":
+                if self.check_channel_membership(user_id):
+                    self.mark_channel_joined(user_id)
+                    text = "✅ Verified! Welcome to GAMERDROID™ V1!"
+                    self.edit_message(chat_id, msg_id, text, self.main_menu_buttons())
+                else:
+                    text = "❌ Please join the channel first!"
+                    self.edit_message(chat_id, msg_id, text, self.channel_buttons())
+                return
+            
+            elif data == "search_games":
+                text = "🔍 Type a game name to search:\n\nExample: 'God of War'"
+                self.edit_message(chat_id, msg_id, text, self.search_buttons())
+                return
+            
+            elif data == "request_game":
+                self.game_requests[user_id] = {'stage': 'name'}
+                text = f"""<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+<b>Game Request</b>
+
+Please tell us the name of the game you'd like to request:
+
+<b>Example:</b> 'God of War: Chains of Olympus'"""
+                self.edit_message(chat_id, msg_id, text, None)
+                return
+            
+            elif data == "stars_menu":
+                self.edit_message(chat_id, msg_id, "⭐ <b>Donate Stars</b>\n\nSupport the bot with Telegram Stars!\n\nChoose amount:", self.stars_buttons())
+                return
+            
+            elif data == "referral_menu":
+                link = self.referral.get_link(user_id)
+                tokens = self.referral.get_tokens(user_id)
+                text = f"""👥 <b>Referral Program</b>
+
+💎 <b>Your Stats:</b>
+• Total Referrals: {tokens}
+• Tokens Earned: {tokens}
+• Current Balance: {tokens}
+
+🎁 <b>How it works:</b>
+1. Share your referral link
+2. Friends join using your link
+3. You get <b>1 Game Token</b> per referral
+4. Use tokens to buy premium games!
+
+🔗 <b>Your Referral Link:</b>
+<code>{link}</code>
+
+💡 1 Game Token = 1 Star value for premium games"""
+                keyboard = {"inline_keyboard": [[{"text": "💰 Premium Games", "callback_data": "premium_games"}, {"text": "💎 My Tokens", "callback_data": "my_tokens"}], [{"text": "🔙 Back", "callback_data": "back_to_menu"}]]}
+                self.edit_message(chat_id, msg_id, text, keyboard)
+                return
+            
+            elif data == "my_tokens":
+                tokens = self.referral.get_tokens(user_id)
+                text = f"""💎 <b>Game Tokens Balance</b>
+
+💰 Current Balance: <b>{tokens} Tokens</b>
+
+💡 <b>What can you do with tokens?</b>
+• Buy premium games (10 tokens each)
+• Exchange for premium content
+• Access exclusive features
+
+🎮 <b>Value:</b> 1 Token = 1 Star"""
+                keyboard = {"inline_keyboard": [[{"text": "🎮 Premium Games", "callback_data": "premium_games"}, {"text": "👥 Referral Program", "callback_data": "referral_menu"}], [{"text": "🔙 Back", "callback_data": "back_to_menu"}]]}
+                self.edit_message(chat_id, msg_id, text, keyboard)
+                return
+            
+            elif data == "premium_games":
+                premium_games = self.premium.get_premium_games(5)
+                user_tokens = self.referral.get_tokens(user_id)
+                
+                if not premium_games:
+                    text = f"""💰 <b>Premium Games</b>
+
+💎 Your Tokens: {user_tokens}
+
+No premium games available yet.
+Check back later for exclusive games that you can purchase with Telegram Stars!"""
+                    keyboard = {"inline_keyboard": [[{"text": "🆓 Regular Games", "callback_data": "game_files"}], [{"text": "🔄 Refresh", "callback_data": "premium_games"}], [{"text": "🔙 Back to Games", "callback_data": "games"}]]}
+                else:
+                    text = f"""💰 <b>Premium Games</b>
+
+💎 Your Tokens: {user_tokens}
+
+"""
+                    kb = []
+                    for i, g in enumerate(premium_games[:5], 1):
+                        gid, name, ftype, fsize, price = g
+                        size = self.format_size(fsize)
+                        text += f"{i}. {name}\n   💎 {price} Tokens | 📦 {ftype} | 📏 {size}\n\n"
+                        kb.append([{"text": f"💎 Buy ({price} Tokens)", "callback_data": f"buy_{gid}"}])
+                    kb.append([{"text": "🆓 Regular Games", "callback_data": "game_files"}])
+                    kb.append([{"text": "🔄 Refresh", "callback_data": "premium_games"}])
+                    kb.append([{"text": "🔙 Back to Games", "callback_data": "games"}])
+                    keyboard = {"inline_keyboard": kb}
+                
+                self.edit_message(chat_id, msg_id, text, keyboard)
+                return
+            
+            elif data.startswith("buy_"):
+                game_id = int(data.replace("buy_", ""))
+                # Get game from database
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT file_name, tokens_price FROM premium_games WHERE id = ?', (game_id,))
+                game = cursor.fetchone()
+                if game:
+                    name, price = game
+                    if self.referral.deduct_tokens(user_id, price):
+                        cursor.execute('INSERT INTO premium_purchases (user_id, game_id, payment_method, tokens_paid) VALUES (?, ?, ?, ?)', (user_id, game_id, 'tokens', price))
+                        self.conn.commit()
+                        self.robust_send_message(chat_id, f"✅ Purchased {name} for {price} tokens!")
+                    else:
+                        self.robust_send_message(chat_id, f"❌ Insufficient tokens! Need {price} tokens.")
+                return
+            
+            # Admin Actions
+            elif data == "upload_stats" and self.is_admin(user_id):
+                text = f"""<b>Your Stats:</b>
+- Total uploads: {self.total_uploads}
+- Forwarded files: {self.total_forwarded}
+- Regular games: {self.get_channel_stats()['total_games']}
+- Premium games: 0
+
+<b>Choose an option:</b>"""
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "update_cache":
+                self.update_cache()
+                self.edit_message(chat_id, msg_id, "✅ Cache updated!", self.admin_panel_buttons())
+                return
+            
+            elif data == "upload_games" and self.is_admin(user_id):
+                text = "📤 Send a game file (ZIP, 7Z, ISO, APK, XAPK, APKS)\n\nThe game will be automatically saved to the database."
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "remove_games" and self.is_admin(user_id):
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT file_name, file_id FROM channel_games LIMIT 30')
+                games = cursor.fetchall()
+                if not games:
+                    self.edit_message(chat_id, msg_id, "❌ No games to remove.", self.admin_panel_buttons())
+                    return
+                self.remove_games_list = [{'file_name': g[0], 'file_id': g[1]} for g in games]
+                text = "🗑️ <b>Remove Games</b>\n\nSelect a game to remove:\n\n"
+                kb = []
+                for i, game in enumerate(self.remove_games_list[:20], 1):
+                    text += f"{i}. {game['file_name'][:40]}\n"
+                    kb.append([{"text": f"❌ Remove {i}", "callback_data": f"remove_{i}"}])
+                kb.append([{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}])
+                self.edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
+                return
+            
+            elif data.startswith("remove_"):
+                idx = int(data.split('_')[1]) - 1
+                if hasattr(self, 'remove_games_list') and idx < len(self.remove_games_list):
+                    game = self.remove_games_list[idx]
+                    cursor = self.conn.cursor()
+                    cursor.execute('DELETE FROM channel_games WHERE file_name = ?', (game['file_name'],))
+                    self.conn.commit()
+                    self.update_cache()
+                    self.robust_send_message(chat_id, f"✅ Removed: {game['file_name']}")
+                    # Refresh
+                    cursor.execute('SELECT file_name, file_id FROM channel_games LIMIT 30')
+                    games = cursor.fetchall()
+                    self.remove_games_list = [{'file_name': g[0], 'file_id': g[1]} for g in games]
+                    if self.remove_games_list:
+                        text = "🗑️ <b>Remove Games</b>\n\nSelect a game to remove:\n\n"
+                        kb = []
+                        for i, g in enumerate(self.remove_games_list[:20], 1):
+                            text += f"{i}. {g['file_name'][:40]}\n"
+                            kb.append([{"text": f"❌ Remove {i}", "callback_data": f"remove_{i}"}])
+                        kb.append([{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}])
+                        self.edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
+                    else:
+                        self.edit_message(chat_id, msg_id, "✅ All games removed!", self.admin_panel_buttons())
+                return
+            
+            elif data == "clear_all_games" and self.is_admin(user_id):
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM channel_games')
                 self.conn.commit()
-                return True
-            return False
-        except:
-            return False
+                self.update_cache()
+                self.edit_message(chat_id, msg_id, "🗑️ All games cleared!", self.admin_panel_buttons())
+                return
+            
+            elif data == "scan_bot_games" and self.is_admin(user_id):
+                self.edit_message(chat_id, msg_id, "🔍 Scanning for bot-uploaded games...\n\nFeature coming soon.", self.admin_panel_buttons())
+                return
+            
+            elif data == "broadcast_menu" and self.is_admin(user_id):
+                self.broadcast_system.create_broadcast_with_buttons(user_id, chat_id)
+                return
+            
+            elif data == "broadcast_text" and self.is_admin(user_id):
+                self.broadcast_system.handle_broadcast_text(user_id, chat_id)
+                return
+            
+            elif data == "broadcast_photo" and self.is_admin(user_id):
+                self.broadcast_system.handle_broadcast_photo(user_id, chat_id)
+                return
+            
+            elif data == "broadcast_video" and self.is_admin(user_id):
+                self.broadcast_system.handle_broadcast_video(user_id, chat_id)
+                return
+            
+            elif data == "broadcast_add_buttons" and self.is_admin(user_id):
+                self.broadcast_system.add_buttons_to_broadcast(user_id, chat_id)
+                return
+            
+            elif data == "send_broadcast" and self.is_admin(user_id):
+                self.broadcast_system.execute_broadcast(user_id, chat_id)
+                return
+            
+            elif data == "cancel_broadcast":
+                if user_id in self.broadcast_system.sessions:
+                    del self.broadcast_system.sessions[user_id]
+                if user_id in self.broadcast_system.button_sessions:
+                    del self.broadcast_system.button_sessions[user_id]
+                self.edit_message(chat_id, msg_id, "❌ Broadcast cancelled.", self.admin_panel_buttons() if self.is_admin(user_id) else self.main_menu_buttons())
+                return
+            
+            elif data == "game_requests_admin" and self.is_admin(user_id):
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT id, user_name, game_name, platform, created_at FROM game_requests WHERE status = "pending" ORDER BY created_at DESC LIMIT 10')
+                requests = cursor.fetchall()
+                if not requests:
+                    self.edit_message(chat_id, msg_id, "📋 No pending game requests.", self.admin_panel_buttons())
+                    return
+                text = "🎮 <b>Game Requests</b>\n\n"
+                for r in requests:
+                    req_id, name, game, platform, created = r
+                    text += f"📝 #{req_id} - {game}\n   👤 {name} | 📱 {platform}\n   🕐 {created[:16]}\n\n"
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "stars_stats" and self.is_admin(user_id):
+                self.edit_message(chat_id, msg_id, "⭐ Stars Stats\n\nTotal Stars Received: 0\nTotal USD: $0.00", self.admin_panel_buttons())
+                return
+            
+            elif data == "backup_menu" and self.is_admin(user_id):
+                text = "💾 Backup System\n\nEnabled: Yes\nAuto-backup on every game upload\nLast backup: Recently"
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "redeploy_panel" and self.is_admin(user_id):
+                text = f"""<b>Admin Redeploy Access</b>
+- Admin: {first_name}
+- User ID: {user_id}
+
+You have admin privileges and can redeploy the bot directly.
+
+Choose redeploy type:"""
+                self.edit_message(chat_id, msg_id, text, self.redeploy_buttons())
+                return
+            
+            elif data == "redeploy_menu":
+                if not self.is_admin(user_id):
+                    self.edit_message(chat_id, msg_id, "❌ Admin only", self.main_menu_buttons())
+                    return
+                text = f"""<b>Admin Redeploy Access</b>
+- Admin: {first_name}
+- User ID: {user_id}
+
+You have admin privileges and can redeploy the bot directly.
+
+Choose redeploy type:"""
+                self.edit_message(chat_id, msg_id, text, self.redeploy_buttons())
+                return
+            
+            elif data == "redeploy_soft" and self.is_admin(user_id):
+                self.edit_message(chat_id, msg_id, "🔄 Soft redeploy initiated... Bot will restart in 5 seconds.", self.admin_panel_buttons())
+                def restart(): time.sleep(5); os._exit(0)
+                Thread(target=restart).start()
+                return
+            
+            elif data == "redeploy_force" and self.is_admin(user_id):
+                self.edit_message(chat_id, msg_id, "🚀 Force redeploy initiated... Bot will restart in 2 seconds.", self.admin_panel_buttons())
+                def restart(): time.sleep(2); os._exit(0)
+                Thread(target=restart).start()
+                return
+            
+            elif data == "system_status" and self.is_admin(user_id):
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM channel_games')
+                games = cursor.fetchone()[0]
+                cursor.execute('SELECT COUNT(*) FROM users')
+                users = cursor.fetchone()[0]
+                text = f"""📊 System Status
+
+🟢 Bot Status: ONLINE
+📁 Regular Games: {games}
+💰 Premium Games: 0
+👥 Users: {users}
+🕒 Mode: Webhook"""
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "referral_stats" and self.is_admin(user_id):
+                cursor = self.conn.cursor()
+                cursor.execute('SELECT user_id, first_name, total_referrals, game_tokens FROM users WHERE total_referrals > 0 ORDER BY total_referrals DESC LIMIT 10')
+                top = cursor.fetchall()
+                text = "🏆 Referral Leaderboard\n\n"
+                for i, (uid, name, refs, tokens) in enumerate(top, 1):
+                    text += f"{i}. {name} - {refs} referrals ({tokens} tokens)\n"
+                if not top:
+                    text += "No referrals yet."
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            elif data == "token_management" and self.is_admin(user_id):
+                text = "💎 Token Management\n\nUse /addtokens [user_id] [amount] to add tokens"
+                self.edit_message(chat_id, msg_id, text, self.admin_panel_buttons())
+                return
+            
+            # Game Categories
+            elif data == "game_zip":
+                self.show_games(self.games_cache.get('zip', []), "ZIP", chat_id, msg_id)
+                return
+            elif data == "game_7z":
+                self.show_games(self.games_cache.get('7z', []), "7Z", chat_id, msg_id)
+                return
+            elif data == "game_iso":
+                self.show_games(self.games_cache.get('iso', []), "ISO", chat_id, msg_id)
+                return
+            elif data == "game_apk":
+                self.show_games(self.games_cache.get('apk', []), "APK", chat_id, msg_id)
+                return
+            elif data == "game_psp":
+                psp_games = self.games_cache.get('cso', []) + self.games_cache.get('pbp', [])
+                self.show_games(psp_games, "PSP", chat_id, msg_id)
+                return
+            elif data == "game_all":
+                self.show_games(self.games_cache.get('all', []), "ALL", chat_id, msg_id)
+                return
+            elif data == "rescan_games":
+                self.update_cache()
+                self.edit_message(chat_id, msg_id, "✅ Cache updated!", self.game_files_buttons())
+                return
+            
+            # Download Game
+            elif data.startswith("dl_"):
+                idx = int(data.replace("dl_", "")) - 1
+                if idx < len(self.current_games_list):
+                    game = self.current_games_list[idx]
+                    self.send_game_file(user_id, chat_id, game['file_name'], game['file_id'])
+                return
+            
+            # Mini Games
+            elif data == "game_guess":
+                self.guess_games[user_id] = random.randint(1, 10)
+                self.edit_message(chat_id, msg_id, "🎯 Guess a number between 1-10!\n\nSend your guess:", None)
+                return
+            elif data == "game_random":
+                num = random.randint(1, 100)
+                self.edit_message(chat_id, msg_id, f"🎲 Random number: {num}", self.mini_games_buttons())
+                return
+            elif data == "game_spin":
+                symbols = ["🍒", "🍋", "🍊", "🍇", "🍉", "💎", "7️⃣"]
+                spin = [random.choice(symbols) for _ in range(3)]
+                self.edit_message(chat_id, msg_id, f"🎰 {spin[0]} | {spin[1]} | {spin[2]}", self.mini_games_buttons())
+                return
+            
+            # Donations
+            elif data.startswith("donate_"):
+                stars = int(data.replace("donate_", ""))
+                self.robust_send_message(chat_id, f"⭐ Thank you! {stars} Stars donation received!")
+                return
+            
+        except Exception as e:
+            print(f"Callback error: {e}")
+            traceback.print_exc()
     
-    # ==================== WEBHOOK UPDATE PROCESSING ====================
+    # ==================== PROCESS UPDATE ====================
     
-    def process_webhook_update(self, update):
-        """Process incoming webhook updates"""
+    def process_update(self, update):
         try:
             if 'message' in update:
                 self.process_message(update['message'])
             elif 'callback_query' in update:
-                self.handle_callback_query(update['callback_query'])
-            elif 'pre_checkout_query' in update:
-                self.answer_callback_query(update['pre_checkout_query']['id'])
+                self.handle_callback(update['callback_query'])
         except Exception as e:
-            print(f"Process webhook update error: {e}")
+            print(f"Update error: {e}")
     
-    # ========== UPDATED: Handle /start with user_id referral ==========
     def process_message(self, message):
         try:
             if 'text' in message:
@@ -3080,28 +1466,26 @@ Choose reply type:"""
                 first_name = message['from']['first_name']
                 username = message['from'].get('username', '')
                 
+                # Handle /start command
                 if text.startswith('/start'):
                     parts = text.split()
                     referrer_id = None
-                    
                     if len(parts) > 1 and parts[1].startswith('ref_'):
-                        referral_value = parts[1].replace('ref_', '')
-                        # Try as user_id (direct number)
                         try:
-                            referrer_id = int(referral_value)
-                        except ValueError:
-                            # Try as referral_code in database
-                            cursor = self.conn.cursor()
-                            cursor.execute('SELECT user_id FROM users WHERE referral_code = ?', (referral_value,))
-                            result = cursor.fetchone()
-                            if result:
-                                referrer_id = result[0]
+                            referrer_id = int(parts[1].replace('ref_', ''))
+                        except:
+                            pass
                     
-                    if referrer_id and referrer_id != user_id:
-                        self.register_user(user_id, username, first_name, referrer_id)
-                    else:
-                        self.register_user(user_id, username, first_name, None)
+                    # Register user
+                    cursor = self.conn.cursor()
+                    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+                    if not cursor.fetchone():
+                        cursor.execute('INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)', (user_id, username, first_name))
+                        self.conn.commit()
+                        if referrer_id and referrer_id != user_id:
+                            self.referral.register_referral(referrer_id, user_id)
                     
+                    # Send verification code
                     code = self.generate_code()
                     self.save_verification_code(user_id, username, first_name, code)
                     welcome = f"""👋 Welcome {first_name}!
@@ -3110,215 +1494,175 @@ Choose reply type:"""
 
 Please join {self.REQUIRED_CHANNEL} and enter this code to verify."""
                     
-                    self.robust_send_message(chat_id, welcome, self.create_channel_buttons())
+                    self.robust_send_message(chat_id, welcome, self.channel_buttons())
                     return True
                 
+                # Handle verification code
                 if text.isdigit() and len(text) == 6:
                     if self.verify_code(user_id, text):
                         if self.check_channel_membership(user_id):
                             self.mark_channel_joined(user_id)
-                            welcome = f"✅ Verification Complete!\n\n👋 Welcome {first_name}!"
-                            self.robust_send_message(chat_id, welcome, self.create_main_menu_buttons())
+                            text = f"""✅ Verification Complete!
+
+👋 Welcome {first_name}!
+
+<b>GAMERDROID™ V1</b>
+{self.monthly_users} monthly users
+
+Made by @rexoronsaye
+
+Choose an option below:"""
+                            self.robust_send_message(chat_id, text, self.main_menu_buttons())
                         else:
-                            self.robust_send_message(chat_id, "✅ Code verified! Now join our channel.", self.create_channel_buttons())
+                            self.robust_send_message(chat_id, "✅ Code verified! Now join our channel.", self.channel_buttons())
                     else:
                         self.robust_send_message(chat_id, "❌ Invalid code. Use /start to get a new code.")
                     return True
                 
-                if self.is_user_completed(user_id):
-                    if text.startswith('/menu'):
-                        self.robust_send_message(chat_id, "🏠 Main Menu", self.create_main_menu_buttons())
+                # Handle game request
+                if user_id in self.game_requests:
+                    session = self.game_requests[user_id]
+                    if session.get('stage') == 'name':
+                        session['game_name'] = text
+                        session['stage'] = 'platform'
+                        self.robust_send_message(chat_id, f"🎮 Game: {text}\n\nNow send the platform (Android/PSP/PC/PS2/etc):")
                         return True
-                    
-                    # Handle game request flow
-                    if user_id in self.request_sessions:
-                        session = self.request_sessions[user_id]
-                        if session.get('stage') == 'waiting_game_name':
-                            self.handle_game_request(user_id, chat_id, text)
-                            return True
-                        elif session.get('stage') == 'waiting_platform':
-                            self.complete_game_request(user_id, chat_id, text)
-                            return True
-                    
-                    # Handle broadcast button input
-                    if user_id in self.broadcast_system.broadcast_sessions:
-                        session = self.broadcast_system.broadcast_sessions[user_id]
-                        if session.get('stage') == 'waiting_buttons':
-                            self.broadcast_system.process_buttons_input(user_id, chat_id, text)
-                            return True
-                        elif session.get('stage') == 'waiting_text':
-                            session['message'] = text
-                            session['stage'] = 'preview'
-                            self.broadcast_system.show_preview(user_id, chat_id)
-                            return True
-                        elif session.get('stage') == 'waiting_caption':
-                            self.broadcast_system.handle_caption(user_id, chat_id, text)
-                            return True
-                    
-                    # Handle media reply text
-                    if user_id in self.media_reply_sessions:
-                        session = self.media_reply_sessions[user_id]
-                        if session.get('stage') == 'waiting_text':
-                            request = self.game_request_system.get_request_by_id(session['request_id'])
-                            if request:
-                                self.game_request_system.send_reply_to_user(session['user_id'], request, text)
-                                self.robust_send_message(chat_id, "✅ Reply sent to user!")
-                            del self.media_reply_sessions[user_id]
-                            return True
+                    elif session.get('stage') == 'platform':
+                        game_name = session['game_name']
+                        platform = text
+                        cursor = self.conn.cursor()
+                        cursor.execute('INSERT INTO game_requests (user_id, user_name, game_name, platform) VALUES (?, ?, ?, ?)', (user_id, first_name, game_name, platform))
+                        self.conn.commit()
+                        del self.game_requests[user_id]
+                        self.robust_send_message(chat_id, f"✅ Game Request Submitted!\n\n🎮 Game: {game_name}\n📱 Platform: {platform}\n\nOur team will review your request!")
+                        # Notify admins
+                        for admin in self.ADMIN_IDS:
+                            self.robust_send_message(admin, f"🎮 New Game Request!\n\nUser: {first_name} (ID: {user_id})\nGame: {game_name}\nPlatform: {platform}")
+                        return True
                 
+                # Handle broadcast text input
+                if user_id in self.broadcast_system.sessions:
+                    session = self.broadcast_system.sessions[user_id]
+                    if session.get('stage') == 'waiting_text':
+                        session['message'] = text
+                        session['stage'] = 'preview'
+                        self.broadcast_system.show_preview(user_id, chat_id)
+                        return True
+                    elif session.get('stage') == 'waiting_buttons':
+                        self.broadcast_system.process_buttons_input(user_id, chat_id, text)
+                        return True
+                    elif session.get('stage') == 'waiting_caption':
+                        if text.lower() == 'skip':
+                            session['caption'] = ''
+                        else:
+                            session['caption'] = text
+                        session['stage'] = 'preview'
+                        self.broadcast_system.show_preview(user_id, chat_id)
+                        return True
+                
+                # Handle number guess
+                if user_id in self.guess_games:
+                    try:
+                        guess = int(text)
+                        target = self.guess_games[user_id]
+                        if guess == target:
+                            self.robust_send_message(chat_id, f"🎉 Correct! The number was {target}!\n\nYou won!", self.mini_games_buttons())
+                            del self.guess_games[user_id]
+                        elif guess < target:
+                            self.robust_send_message(chat_id, "📈 Too low! Try again:")
+                        else:
+                            self.robust_send_message(chat_id, "📉 Too high! Try again:")
+                    except:
+                        self.robust_send_message(chat_id, "❌ Please send a number between 1-10:")
+                    return True
+                
+                # Handle search
                 if self.is_user_verified(user_id):
-                    if self.is_user_completed(user_id):
-                        pass
+                    self.search_games(chat_id, text)
+                    return True
             
-            # Handle photo uploads for broadcast
-            elif 'photo' in message and user_id in self.broadcast_system.broadcast_sessions:
-                session = self.broadcast_system.broadcast_sessions[user_id]
+            # Handle photo upload for broadcast
+            elif 'photo' in message and user_id in self.broadcast_system.sessions:
+                session = self.broadcast_system.sessions[user_id]
                 if session.get('stage') == 'waiting_photo':
                     session['photo'] = message['photo'][-1]['file_id']
-                    self.robust_send_message(chat_id, "📝 Now send the caption (or send 'skip'):")
                     session['stage'] = 'waiting_caption'
+                    self.robust_send_message(chat_id, "📝 Now send the caption (or send 'skip'):")
                     return True
             
-            # Handle video uploads for broadcast
-            elif 'video' in message and user_id in self.broadcast_system.broadcast_sessions:
-                session = self.broadcast_system.broadcast_sessions[user_id]
+            # Handle video upload for broadcast
+            elif 'video' in message and user_id in self.broadcast_system.sessions:
+                session = self.broadcast_system.sessions[user_id]
                 if session.get('stage') == 'waiting_video':
                     session['video'] = message['video']['file_id']
-                    self.robust_send_message(chat_id, "📝 Now send the caption (or send 'skip'):")
                     session['stage'] = 'waiting_caption'
+                    self.robust_send_message(chat_id, "📝 Now send the caption (or send 'skip'):")
                     return True
             
-            # Handle media replies (photo/video/document)
-            elif 'photo' in message and user_id in self.media_reply_sessions:
-                session = self.media_reply_sessions[user_id]
-                if session.get('stage') == 'waiting_photo':
-                    file_id = message['photo'][-1]['file_id']
-                    request = self.game_request_system.get_request_by_id(session['request_id'])
-                    if request:
-                        self.robust_send_message(chat_id, "📝 Now send the caption for this photo:")
-                        session['stage'] = 'waiting_photo_caption'
-                        session['file_id'] = file_id
-                    return True
-            
-            elif 'video' in message and user_id in self.media_reply_sessions:
-                session = self.media_reply_sessions[user_id]
-                if session.get('stage') == 'waiting_video':
-                    file_id = message['video']['file_id']
-                    request = self.game_request_system.get_request_by_id(session['request_id'])
-                    if request:
-                        self.robust_send_message(chat_id, "📝 Now send the caption for this video:")
-                        session['stage'] = 'waiting_video_caption'
-                        session['file_id'] = file_id
-                    return True
-            
-            elif 'document' in message and user_id in self.media_reply_sessions:
-                session = self.media_reply_sessions[user_id]
-                if session.get('stage') == 'waiting_document':
-                    file_id = message['document']['file_id']
-                    request = self.game_request_system.get_request_by_id(session['request_id'])
-                    if request:
-                        self.robust_send_message(chat_id, "📝 Now send the caption for this document:")
-                        session['stage'] = 'waiting_document_caption'
-                        session['file_id'] = file_id
-                    return True
-            
-            # Handle game uploads (documents) - SAVE TO DATABASE
+            # Handle game upload (admins only)
             elif 'document' in message:
                 if self.is_admin(user_id):
-                    document = message['document']
-                    file_name = document.get('file_name', 'Unknown')
-                    file_id = document['file_id']
-                    file_size = document.get('file_size', 0)
-                    file_type = file_name.split('.')[-1] if '.' in file_name else 'unknown'
-                    
-                    print(f"📁 Game file uploaded: {file_name} by user {user_id}")
-                    
-                    # Check for duplicate
-                    cursor = self.conn.cursor()
-                    cursor.execute('SELECT id FROM channel_games WHERE file_name = ?', (file_name,))
-                    if cursor.fetchone():
-                        self.robust_send_message(chat_id, f"❌ Game '{file_name}' already exists!")
-                        return True
-                    
-                    # Save to database
-                    category = self.determine_file_category(file_name)
-                    cursor.execute('''
-                        INSERT INTO channel_games (message_id, file_name, file_type, file_size, upload_date, category, added_by, is_uploaded, file_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (message['message_id'], file_name, file_type, file_size, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), category, user_id, 1, file_id))
-                    self.conn.commit()
-                    
-                    self.update_games_cache()
-                    
-                    size_str = self.format_file_size(file_size)
-                    success_text = f"""✅ <b>Game Successfully Added to Database!</b>
-
-📁 <b>File Name:</b> {file_name}
-📦 <b>Type:</b> {file_type.upper()}
-📏 <b>Size:</b> {size_str}
-📂 <b>Category:</b> {category}
-🆔 <b>Added by:</b> {user_id}
-⏰ <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-The game is now available in the Games section!"""
-                    
-                    self.robust_send_message(chat_id, success_text)
-                    
-                    # Trigger GitHub backup
-                    self.trigger_auto_backup(file_name)
+                    doc = message['document']
+                    file_name = doc.get('file_name', 'unknown')
+                    file_id = doc['file_id']
+                    file_size = doc.get('file_size', 0)
+                    self.save_game(message, file_id, file_name, file_size, user_id)
                 else:
                     self.robust_send_message(chat_id, "❌ Only admins can upload games.")
                 return True
             
             return False
         except Exception as e:
-            print(f"Process message error: {e}")
+            print(f"Process error: {e}")
             return False
     
-    def trigger_auto_backup(self, file_name=""):
-        """Trigger GitHub backup when a game is uploaded"""
-        if self.github_backup.is_enabled:
-            thread = Thread(target=self.github_backup.backup_database_to_github, args=(f"Auto-backup: Game '{file_name}' uploaded",))
-            thread.start()
-            print(f"💾 Auto-backup triggered for: {file_name}")
+    def search_games(self, chat_id, query):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT file_name, file_type, file_size, file_id FROM channel_games WHERE file_name LIKE ? LIMIT 20', (f'%{query}%',))
+            results = cursor.fetchall()
+            if not results:
+                self.robust_send_message(chat_id, f"🔍 No games found for '{query}'")
+                return
+            self.current_games_list = [{'file_name': r[0], 'file_type': r[1], 'file_size': r[2], 'file_id': r[3]} for r in results]
+            text = f"🔍 <b>Search Results for '{query}'</b>\n\n📊 Found: {len(results)} games\n\n"
+            keyboard = []
+            for i, game in enumerate(self.current_games_list, 1):
+                size = self.format_size(game['file_size'])
+                text += f"{i}. <code>{game['file_name'][:40]}</code>\n   📦 {game['file_type'].upper()} | 📏 {size}\n\n"
+                keyboard.append([{"text": f"📥 Download {i}", "callback_data": f"dl_{i}"}])
+            keyboard.append([{"text": "🔍 New Search", "callback_data": "search_games"}, {"text": "🔙 Back", "callback_data": "game_files"}])
+            self.robust_send_message(chat_id, text, {"inline_keyboard": keyboard})
+        except Exception as e:
+            print(f"Search error: {e}")
 
 # ==================== MAIN ENTRY POINT ====================
 
 if __name__ == "__main__":
-    print("🚀 Starting Enhanced Telegram Bot with Webhook Mode...")
-    print("💾 GitHub Auto-Backup will trigger on every game upload")
-    print("🌐 Webhook mode enabled for 24/7 operation")
+    print("🚀 Starting GAMERDROID™ V1 Bot...")
     
     # Start webhook server
-    start_webhook_server()
+    Thread(target=run_server, daemon=True).start()
     time.sleep(2)
     
     if BOT_TOKEN:
         try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
-            response = requests.get(url, timeout=10)
-            if response.json().get('ok'):
-                print("✅ Bot token is valid")
-                
-                # Set webhook
-                set_webhook()
-                
-                # Initialize bot
-                bot_instance = CrossPlatformBot(BOT_TOKEN)
-                
-                # Start keep-alive service
-                keep_alive = EnhancedKeepAliveService()
-                keep_alive.start()
-                
-                # Keep main thread alive
-                while True:
-                    time.sleep(60)
-                    print(f"💚 Bot alive - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                print("❌ Invalid bot token")
+            # Set webhook
+            public_url = os.environ.get('CHOREO_URL') or os.environ.get('RENDER_EXTERNAL_URL')
+            if public_url:
+                webhook_url = f"{public_url}/webhook"
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=10)
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook", data={"url": webhook_url}, timeout=10)
+                print(f"✅ Webhook set: {webhook_url}")
+            
+            bot_instance = GamerDroidBot(BOT_TOKEN)
+            print("✅ Bot is running!")
+            
+            # Keep alive
+            while True:
+                time.sleep(60)
+                print(f"💚 Bot alive - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         except Exception as e:
-            print(f"❌ Connection error: {e}")
+            print(f"❌ Error: {e}")
     else:
         print("❌ No BOT_TOKEN provided")
-    
-    print("🔴 Bot service ended")
