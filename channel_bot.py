@@ -9,11 +9,13 @@ import threading
 import os
 import sys
 import html
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request as flask_request
 from threading import Thread
 import traceback
 import base64
 from io import BytesIO
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Load .env file FIRST so all os.environ.get() calls below see the values
 try:
@@ -21,6 +23,16 @@ try:
     load_dotenv()
 except ImportError:
     pass  # python-dotenv not installed; fall through to system env vars
+
+# ── Shared HTTP session with connection pooling ────────────────────────────────
+# Re-using TCP connections saves ~200-400 ms per Telegram API call.
+_tg_session = requests.Session()
+_tg_session.mount('https://', HTTPAdapter(
+    pool_connections=4,
+    pool_maxsize=16,
+    max_retries=Retry(total=2, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
+))
+# ──────────────────────────────────────────────────────────────────────────────
 
 # ==================== CENTRAL ENVIRONMENT VARIABLE CONFIG ====================
 # All runtime config lives here. Set these in Choreo / Render / .env
@@ -99,7 +111,7 @@ def webhook():
     try:
         if not bot_instance:
             return jsonify({'ok': False, 'error': 'Bot not initialized'}), 200
-        update = request.get_json()
+        update = flask_request.get_json()
         if update:
             Thread(target=bot_instance.process_update, args=(update,), daemon=True).start()
         return jsonify({'ok': True}), 200
@@ -111,8 +123,8 @@ def webhook():
 def redeploy_endpoint():
     """Redeploy endpoint for admins"""
     try:
-        auth_token = request.headers.get('Authorization', '')
-        payload = request.get_json() or {}
+        auth_token = flask_request.headers.get('Authorization', '')
+        payload = flask_request.get_json() or {}
         user_id = str(payload.get('user_id', ''))
         is_authorized = (
             auth_token == REDEPLOY_TOKEN
@@ -176,7 +188,7 @@ class EnhancedKeepAliveService:
             while self.is_running:
                 try:
                     self.ping_count += 1
-                    response = requests.get(self.health_url, timeout=15)
+                    response = _tg_session.get(self.health_url, timeout=15)
                     
                     if response.status_code == 200:
                         self.last_successful_ping = time.time()
@@ -248,6 +260,9 @@ class ReferralSystem:
                 cursor.execute('ALTER TABLE users ADD COLUMN total_referrals INTEGER DEFAULT 0')
             if 'referred_by' not in cols:
                 cursor.execute('ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT 0')
+            if 'pending_referrer_id' not in cols:
+                # Stores the referrer until the user finishes full verification
+                cursor.execute('ALTER TABLE users ADD COLUMN pending_referrer_id INTEGER DEFAULT 0')
             self.bot.conn.commit()
         except Exception as e:
             print(f"Referral table setup error: {e}")
@@ -288,31 +303,90 @@ class ReferralSystem:
         except Exception:
             return False
 
-    def register_referral(self, referrer_id, referred_id):
-        """Award 1 token to referrer; mark referred user as referred. No-op if already referred."""
+    def store_pending_referral(self, referrer_id, referred_id):
+        """
+        Store the referrer ID when a new user clicks the referral link.
+        The token is NOT awarded yet — only after full verification completes.
+        Safe to call multiple times; only stores once (no overwrite if already set).
+        """
         try:
+            if referrer_id == referred_id:
+                return False
             cursor = self.bot.conn.cursor()
-            cursor.execute('SELECT referred_by FROM users WHERE user_id = ?', (referred_id,))
-            result = cursor.fetchone()
-            if result and result[0] != 0:
-                return False  # already referred
+            # Only set pending_referrer_id if not already referred and not already pending
             cursor.execute(
-                'UPDATE users SET game_tokens = game_tokens + 1, total_referrals = total_referrals + 1 WHERE user_id = ?',
-                (referrer_id,)
+                'SELECT referred_by, pending_referrer_id FROM users WHERE user_id = ?',
+                (referred_id,)
             )
+            row = cursor.fetchone()
+            if row and (row[0] != 0 or row[1] != 0):
+                return False  # already referred or already has a pending referrer
             cursor.execute(
-                'UPDATE users SET referred_by = ? WHERE user_id = ?',
+                'UPDATE users SET pending_referrer_id = ? WHERE user_id = ? AND referred_by = 0 AND pending_referrer_id = 0',
                 (referrer_id, referred_id)
             )
             self.bot.conn.commit()
-            self.bot.robust_send_message(
-                referrer_id,
-                "🎉 <b>New Referral!</b>\n\nSomeone joined using your referral link!\nYou earned <b>1 Game Token</b> 💎"
-            )
-            return True
+            print(f"📌 Pending referral stored: {referrer_id} → {referred_id}")
+            return cursor.rowcount > 0
         except Exception as e:
-            print(f"Referral register error: {e}")
+            print(f"store_pending_referral error: {e}")
             return False
+
+    def complete_referral(self, referred_id):
+        """
+        Called when referred_id finishes full verification (code + channel).
+        Awards 1 token to the referrer exactly once, then clears pending state.
+        Returns the referrer_id if credited, else None.
+        """
+        try:
+            cursor = self.bot.conn.cursor()
+            cursor.execute(
+                'SELECT pending_referrer_id, referred_by FROM users WHERE user_id = ?',
+                (referred_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            pending_referrer, already_referred = row
+            if pending_referrer == 0 or already_referred != 0:
+                # No pending referrer, or already credited
+                return None
+
+            # Award 1 token to referrer and mark referred user as referred
+            cursor.execute(
+                '''UPDATE users
+                   SET game_tokens = game_tokens + 1,
+                       total_referrals = total_referrals + 1
+                   WHERE user_id = ?''',
+                (pending_referrer,)
+            )
+            cursor.execute(
+                '''UPDATE users
+                   SET referred_by = ?,
+                       pending_referrer_id = 0
+                   WHERE user_id = ?''',
+                (pending_referrer, referred_id)
+            )
+            self.bot.conn.commit()
+
+            # Notify the referrer
+            referrer_tokens = self.get_tokens(pending_referrer)
+            self.bot.robust_send_message(
+                pending_referrer,
+                f"🎉 <b>Referral Completed!</b>\n\n"
+                f"Your referral just finished verification!\n"
+                f"You earned <b>1 Game Token</b> 💎\n\n"
+                f"💰 Total Tokens: <b>{referrer_tokens}</b>"
+            )
+            print(f"✅ Referral credited: {pending_referrer} earned 1 token for referring {referred_id}")
+            return pending_referrer
+        except Exception as e:
+            print(f"complete_referral error: {e}")
+            return None
+
+    def register_referral(self, referrer_id, referred_id):
+        """Legacy shim — kept for any existing call sites. Routes to store_pending_referral."""
+        return self.store_pending_referral(referrer_id, referred_id)
 
     def get_referral_link(self, user_id):
         return f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
@@ -329,6 +403,159 @@ class ReferralSystem:
             return {'tokens': 0, 'referrals': 0}
         except Exception:
             return {'tokens': 0, 'referrals': 0}
+
+# ==================== ADMIN CODE SYSTEM ====================
+
+class AdminCodeSystem:
+    """
+    Admin-generated 6-digit access codes.
+    Each code has: expiry (days), max uses, per-user use limit (once per user).
+    """
+
+    PRESET_DURATIONS = {
+        '1':    ('1 Day',    1),
+        '7':    ('7 Days',   7),
+        '14':   ('14 Days', 14),
+        '30':   ('30 Days', 30),
+        '90':   ('90 Days', 90),
+        '365':  ('1 Year',  365),
+        '0':    ('No Expiry', None),
+    }
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _generate_code(self):
+        """Return a random 6-digit string not already in DB."""
+        cursor = self.bot.conn.cursor()
+        for _ in range(20):
+            code = ''.join(secrets.choice('0123456789') for _ in range(6))
+            cursor.execute('SELECT id FROM admin_codes WHERE code = ?', (code,))
+            if not cursor.fetchone():
+                return code
+        raise RuntimeError("Could not generate unique code after 20 attempts")
+
+    def _is_valid(self, code_row, user_id):
+        """
+        Return (ok: bool, reason: str) for a given row from admin_codes.
+        """
+        cid, code, max_uses, used_count, is_active, expires_at = (
+            code_row[0], code_row[1], code_row[4], code_row[5], code_row[6], code_row[3]
+        )
+        if not is_active:
+            return False, "This code has been deactivated."
+        if expires_at:
+            if datetime.now() > datetime.fromisoformat(expires_at):
+                return False, "This code has expired."
+        if max_uses > 0 and used_count >= max_uses:
+            return False, "This code has reached its maximum number of uses."
+        # Check per-user uniqueness
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            'SELECT id FROM admin_code_uses WHERE code_id = ? AND user_id = ?',
+            (cid, user_id)
+        )
+        if cursor.fetchone():
+            return False, "You have already used this code."
+        return True, "ok"
+
+    # ── public API ─────────────────────────────────────────────────────────────
+
+    def create_code(self, admin_id, days, max_uses=100, description=''):
+        """
+        Create a new code.
+        days=None means no expiry.
+        Returns the code string.
+        """
+        code = self._generate_code()
+        if days is None:
+            expires_at = datetime(9999, 12, 31)
+        else:
+            expires_at = datetime.now() + timedelta(days=days)
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            '''INSERT INTO admin_codes
+               (code, created_by, expires_at, max_uses, description)
+               VALUES (?, ?, ?, ?, ?)''',
+            (code, admin_id, expires_at.isoformat(), max_uses, description)
+        )
+        self.bot.conn.commit()
+        return code
+
+    def redeem(self, code_str, user_id):
+        """
+        Try to redeem a code for user_id.
+        Returns (success: bool, message: str).
+        """
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            '''SELECT id, code, created_by, expires_at, max_uses, used_count, is_active
+               FROM admin_codes WHERE code = ?''',
+            (code_str,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False, "Invalid code."
+        ok, reason = self._is_valid(row, user_id)
+        if not ok:
+            return False, reason
+        # Mark use
+        cursor.execute(
+            'INSERT INTO admin_code_uses (code_id, user_id) VALUES (?, ?)',
+            (row[0], user_id)
+        )
+        cursor.execute(
+            'UPDATE admin_codes SET used_count = used_count + 1 WHERE id = ?',
+            (row[0],)
+        )
+        self.bot.conn.commit()
+        return True, "Code accepted! ✅"
+
+    def list_codes(self, admin_id):
+        """Return all codes created by this admin, active ones first."""
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            '''SELECT code, expires_at, max_uses, used_count, is_active, description
+               FROM admin_codes
+               WHERE created_by = ?
+               ORDER BY is_active DESC, created_at DESC
+               LIMIT 20''',
+            (admin_id,)
+        )
+        return cursor.fetchall()
+
+    def deactivate_code(self, admin_id, code_str):
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            'UPDATE admin_codes SET is_active = 0 WHERE code = ? AND created_by = ?',
+            (code_str, admin_id)
+        )
+        self.bot.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_code_stats(self, code_str):
+        """Return a dict of stats for a given code."""
+        cursor = self.bot.conn.cursor()
+        cursor.execute(
+            '''SELECT id, code, expires_at, max_uses, used_count, is_active, description
+               FROM admin_codes WHERE code = ?''',
+            (code_str,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        cursor.execute(
+            'SELECT COUNT(*) FROM admin_code_uses WHERE code_id = ?',
+            (row[0],)
+        )
+        unique_users = cursor.fetchone()[0]
+        return {
+            'code': row[1], 'expires_at': row[2], 'max_uses': row[3],
+            'used_count': row[4], 'is_active': bool(row[5]),
+            'description': row[6], 'unique_users': unique_users
+        }
 
 # ==================== GITHUB BACKUP SYSTEM ====================
 
@@ -367,7 +594,7 @@ class GitHubBackupSystem:
     def get_file_sha(self):
         """Return the blob SHA of the current backup file, or None if it doesn't exist yet."""
         try:
-            r = requests.get(
+            r = _tg_session.get(
                 self._api_url,
                 headers=self._headers,
                 params={'ref': self.backup_branch},
@@ -380,13 +607,15 @@ class GitHubBackupSystem:
             return None
 
     def create_db_backup(self):
-        """Copy the live DB to a temp file and return the path."""
+        """Create a consistent backup of the live DB using SQLite's native backup API."""
         try:
-            import shutil
             db_path     = self.bot.get_db_path()
             backup_path = db_path + '.backup'
-            shutil.copy2(db_path, backup_path)
-            print(f"✅ Local DB snapshot: {backup_path}")
+            # Use sqlite3.connect().backup() — safe even with WAL mode and concurrent writes
+            dest_conn = sqlite3.connect(backup_path)
+            self.bot.conn.backup(dest_conn, pages=0)   # pages=0 = copy entire DB at once
+            dest_conn.close()
+            print(f"✅ Consistent DB snapshot: {backup_path}")
             return backup_path
         except Exception as e:
             print(f"❌ DB snapshot error: {e}")
@@ -417,7 +646,7 @@ class GitHubBackupSystem:
             if file_sha:
                 payload['sha'] = file_sha
 
-            r = requests.put(self._api_url, headers=self._headers, json=payload, timeout=60)
+            r = _tg_session.put(self._api_url, headers=self._headers, json=payload, timeout=60)
 
             try:
                 os.remove(backup_file)
@@ -442,7 +671,7 @@ class GitHubBackupSystem:
             return False
         try:
             print("🔄 Fetching backup from GitHub …")
-            r = requests.get(
+            r = _tg_session.get(
                 self._api_url,
                 headers=self._headers,
                 params={'ref': self.backup_branch},
@@ -488,7 +717,7 @@ class GitHubBackupSystem:
             return {"enabled": False}
         try:
             # Use the commits API — more reliable for metadata than contents
-            r = requests.get(
+            r = _tg_session.get(
                 f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/commits",
                 headers=self._headers,
                 params={'path': self.backup_path, 'per_page': 1},
@@ -642,7 +871,7 @@ Choose an option:"""
                 'Content-Type': 'application/json'
             }
             
-            response = requests.post(redeploy_url, json=webhook_data, headers=headers, timeout=30)
+            response = _tg_session.post(redeploy_url, json=webhook_data, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 print("✅ Redeploy webhook triggered successfully")
@@ -806,7 +1035,7 @@ class TelegramStarsSystem:
             print(f"⭐ Creating Stars invoice for {stars_amount} stars (${usd_amount:.2f})")
             
             url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
+            response = _tg_session.post(url, data=invoice_data, timeout=30)
             result = response.json()
             
             if result.get('ok'):
@@ -864,7 +1093,7 @@ class TelegramStarsSystem:
             print(f"⭐ Creating premium game invoice: {game_name} for {stars_amount} stars")
             
             url = self.bot.base_url + "sendInvoice"
-            response = requests.post(url, data=invoice_data, timeout=30)
+            response = _tg_session.post(url, data=invoice_data, timeout=30)
             result = response.json()
             
             if result.get('ok'):
@@ -1353,6 +1582,9 @@ class CrossPlatformBot:
         # Referral & token system (must come after DB setup)
         self.referral = ReferralSystem(self)
 
+        # Admin code system
+        self.admin_codes = AdminCodeSystem(self)
+
         # Stars, request, redeploy, and backup systems
         self.stars_system = TelegramStarsSystem(self)
         self.game_request_system = GameRequestSystem(self)
@@ -1365,7 +1597,8 @@ class CrossPlatformBot:
         self.request_sessions = {}
         self.upload_sessions = {}
         self.reply_sessions = {}
-        self.search_mode = {}  # tracks users currently typing a search query
+        self.search_mode = {}
+        self.code_sessions = {}   # admin code creation flow
         
         # CRASH PROTECTION
         self.last_restart = time.time()
@@ -1420,13 +1653,18 @@ class CrossPlatformBot:
             if db_dir and not os.path.exists(db_dir):
                 os.makedirs(db_dir, exist_ok=True)
             
-            # Try to restore from GitHub first
+            # Restore from GitHub only if local DB doesn't exist or is empty
             if self.github_backup.is_enabled:
-                print("🔍 Checking for GitHub backup...")
-                if self.github_backup.restore_database_from_github():
-                    print("✅ Database restored from GitHub")
+                db_path = self.get_db_path()
+                local_exists = os.path.exists(db_path) and os.path.getsize(db_path) > 4096
+                if not local_exists:
+                    print("🔍 No local DB found — attempting GitHub restore …")
+                    if self.github_backup.restore_database_from_github():
+                        print("✅ Database restored from GitHub")
+                    else:
+                        print("ℹ️ No GitHub backup found, starting fresh")
                 else:
-                    print("ℹ️ No GitHub backup found or restore failed, using local database")
+                    print("ℹ️ Local DB found — skipping GitHub restore")
             
             # Ensure database is properly set up
             self.setup_database()
@@ -1471,55 +1709,22 @@ class CrossPlatformBot:
             self.search_sessions = {}
             self.search_results = {}
             self.search_mode = {}
+            self.code_sessions = {}
             
             print("✅ Sessions reset for fresh start")
         except Exception as e:
             print(f"❌ Session recovery error: {e}")
 
     def recover_uploaded_files(self):
-        """Recover and verify all uploaded files after restart"""
+        """Count uploaded files on startup — skip slow per-file getFile API verification."""
         try:
-            if not hasattr(self, 'conn') or not self.conn:
-                self.setup_database()
-            
-            print("🔄 Recovering uploaded files...")
-            
             cursor = self.conn.cursor()
-            
-            # Check bot-uploaded files
-            cursor.execute('''
-                SELECT message_id, file_name, bot_message_id, file_id 
-                FROM channel_games 
-                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
-            ''')
-            bot_files = cursor.fetchall()
-            
-            recovered_count = 0
-            for message_id, file_name, bot_message_id, file_id in bot_files:
-                if self.verify_file_accessible(bot_message_id, file_id, True):
-                    recovered_count += 1
-                    print(f"✅ Recovered bot file: {file_name}")
-                else:
-                    print(f"⚠️ Bot file may be inaccessible: {file_name}")
-            
-            # Check premium games
-            cursor.execute('''
-                SELECT id, file_name, bot_message_id, file_id 
-                FROM premium_games 
-                WHERE is_uploaded = 1 AND bot_message_id IS NOT NULL
-            ''')
-            premium_files = cursor.fetchall()
-            
-            for game_id, file_name, bot_message_id, file_id in premium_files:
-                if self.verify_file_accessible(bot_message_id, file_id, True):
-                    recovered_count += 1
-                    print(f"✅ Recovered premium file: {file_name}")
-                else:
-                    print(f"⚠️ Premium file may be inaccessible: {file_name}")
-            
-            print(f"✅ File recovery complete: {recovered_count} files verified")
-            return recovered_count
-            
+            cursor.execute('SELECT COUNT(*) FROM channel_games WHERE is_uploaded = 1')
+            bot_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM premium_games WHERE is_uploaded = 1')
+            premium_count = cursor.fetchone()[0]
+            print(f"✅ File recovery: {bot_count} regular + {premium_count} premium uploads in DB")
+            return bot_count + premium_count
         except Exception as e:
             print(f"❌ File recovery error: {e}")
             return 0
@@ -1529,7 +1734,7 @@ class CrossPlatformBot:
         try:
             url = self.base_url + "getFile"
             data = {"file_id": file_id}
-            response = requests.post(url, data=data, timeout=10)
+            response = _tg_session.post(url, data=data, timeout=10)
             result = response.json()
             return result.get('ok', False)
         except Exception:
@@ -1755,6 +1960,9 @@ The bot will now use the restored data."""
             [
                 {"text": "👥 Referral Program", "callback_data": "referral_menu"},
                 {"text": "💎 My Tokens", "callback_data": "my_tokens"}
+            ],
+            [
+                {"text": "🔑 Redeem Code", "callback_data": "redeem_code_info"}
             ]
         ]
         
@@ -1798,7 +2006,7 @@ The bot will now use the restored data."""
                 ],
                 [
                     {"text": "👥 Referral Stats", "callback_data": "referral_stats"},
-                    {"text": "💎 Token Management", "callback_data": "token_management"}
+                    {"text": "🔑 Code Manager", "callback_data": "code_manager"}
                 ],
                 [
                     {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}
@@ -1842,32 +2050,37 @@ The bot will now use the restored data."""
     
     def create_game_files_buttons(self):
         stats = self.get_channel_stats()
-        
+
         psp_count = len(self.games_cache.get('cso', [])) + len(self.games_cache.get('pbp', []))
-        
+        android_count = (len(self.games_cache.get('apk', []))
+                         + len(self.games_cache.get('xapk', []))
+                         + len(self.games_cache.get('apks', [])))
+
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": f"📦 ZIP ({len(self.games_cache.get('zip', []))})", "callback_data": "game_zip"},
-                    {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})", "callback_data": "game_7z"}
+                    {"text": f"📦 ZIP ({len(self.games_cache.get('zip', []))})",  "callback_data": "game_zip"},
+                    {"text": f"🗜️ 7Z ({len(self.games_cache.get('7z', []))})",   "callback_data": "game_7z"}
                 ],
                 [
-                    {"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})", "callback_data": "game_iso"},
-                    {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})", "callback_data": "game_apk"}
+                    {"text": f"💿 ISO ({len(self.games_cache.get('iso', []))})",  "callback_data": "game_iso"},
+                    {"text": f"🎮 PSP ({psp_count})",                             "callback_data": "game_psp"}
                 ],
                 [
-                    {"text": f"🎮 PSP ({psp_count})", "callback_data": "game_psp"},
-                    {"text": f"📋 All ({stats['total_games']})", "callback_data": "game_all"}
+                    {"text": f"📱 APK ({len(self.games_cache.get('apk', []))})",   "callback_data": "game_apk"},
+                    {"text": f"📦 XAPK ({len(self.games_cache.get('xapk', []))})", "callback_data": "game_xapk"}
+                ],
+                [
+                    {"text": f"🗂️ APKS ({len(self.games_cache.get('apks', []))})", "callback_data": "game_apks"},
+                    {"text": f"📋 All ({stats['total_games']})",                   "callback_data": "game_all"}
                 ],
                 [
                     {"text": "💰 Premium Games", "callback_data": "premium_games"},
-                    {"text": "🔍 Search Games", "callback_data": "search_games"}
+                    {"text": "🔍 Search Games",  "callback_data": "search_games"}
                 ],
                 [
-                    {"text": "🔄 Rescan", "callback_data": "rescan_games"}
-                ],
-                [
-                    {"text": "🔙 Back to Games", "callback_data": "games"}
+                    {"text": "🔄 Rescan", "callback_data": "rescan_games"},
+                    {"text": "🔙 Back",   "callback_data": "games"}
                 ]
             ]
         }
@@ -2206,7 +2419,7 @@ If the issue persists, please contact the admins directly."""
                 self.robust_send_message(chat_id,
                     "🆓 <b>Regular Game Upload</b>\n\n"
                     "Please upload the game file now.\n\n"
-                    "📁 Supported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP\n\n"
+                    "📁 Supported formats: ZIP, 7Z, ISO, APK, XAPK, APKS, RAR, PKG, CSO, PBP\n\n"
                     "💡 The file will be available for free to all users."
                 )
                 return
@@ -2272,7 +2485,23 @@ If the issue persists, please contact the admins directly."""
                     self.edit_message(chat_id, message_id, "❌ Invalid game.", {"inline_keyboard": [[{"text": "🔙 Back", "callback_data": "premium_games"}]]})
                 return
 
-            elif data == "referral_menu":
+            elif data == "redeem_code_info":
+                tokens = self.referral.get_tokens(user_id)
+                text = (
+                    f"🔑 <b>Redeem an Access Code</b>\n\n"
+                    f"💎 Your current tokens: <b>{tokens}</b>\n\n"
+                    f"To redeem a code, simply type the <b>6-digit code</b> and send it as a message.\n\n"
+                    f"✅ Each code can only be used <b>once per user</b>.\n"
+                    f"🎁 Codes reward <b>5 Game Tokens</b> each.\n\n"
+                    f"<i>Get codes from admins or special events!</i>"
+                )
+                keyboard = {"inline_keyboard": [
+                    [{"text": "💎 My Tokens", "callback_data": "my_tokens"},
+                     {"text": "👥 Referral", "callback_data": "referral_menu"}],
+                    [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+                ]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
                 stats = self.referral.get_stats(user_id)
                 link = self.referral.get_referral_link(user_id)
                 text = f"""👥 <b>Referral Program</b>
@@ -2341,13 +2570,117 @@ If the issue persists, please contact the admins directly."""
                 self.edit_message(chat_id, message_id, text, self.create_admin_buttons())
                 return
 
-            elif data == "token_management":
+            elif data == "code_manager":
                 if not self.is_admin(user_id):
-                    self.edit_message(chat_id, message_id, "❌ Access denied. Admin only.", self.create_main_menu_buttons(user_id))
+                    self.edit_message(chat_id, message_id, "❌ Access denied.", self.create_main_menu_buttons(user_id))
                     return
-                text = "💎 <b>Token Management</b>\n\nUse the options below to manage user tokens.\n\nTo add tokens, reply with:\n<code>addtokens USER_ID AMOUNT</code>"
+                codes = self.admin_codes.list_codes(user_id)
+                text  = "🔑 <b>Admin Code Manager</b>\n\n"
+                if codes:
+                    for c in codes[:10]:
+                        code_str, expires, max_uses, used, active, desc = c
+                        status = "✅" if active else "❌"
+                        exp_str = expires[:10] if expires and expires[:4] != '9999' else "No expiry"
+                        text += f"{status} <code>{code_str}</code> — {used}/{max_uses} uses — exp: {exp_str}"
+                        if desc:
+                            text += f" — {desc}"
+                        text += "\n"
+                else:
+                    text += "No codes created yet.\n"
                 keyboard = {"inline_keyboard": [
-                    [{"text": "📊 Referral Stats", "callback_data": "referral_stats"}],
+                    [{"text": "➕ Create New Code", "callback_data": "create_code_start"}],
+                    [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+                ]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
+
+            elif data == "create_code_start":
+                if not self.is_admin(user_id):
+                    return
+                self.code_sessions[user_id] = {'stage': 'waiting_duration'}
+                text = ("🔑 <b>Create Access Code</b>\n\n"
+                        "Select the code duration:")
+                keyboard = {"inline_keyboard": [
+                    [{"text": "1 Day",   "callback_data": "code_dur_1"},
+                     {"text": "7 Days",  "callback_data": "code_dur_7"}],
+                    [{"text": "14 Days", "callback_data": "code_dur_14"},
+                     {"text": "30 Days", "callback_data": "code_dur_30"}],
+                    [{"text": "90 Days", "callback_data": "code_dur_90"},
+                     {"text": "1 Year",  "callback_data": "code_dur_365"}],
+                    [{"text": "No Expiry","callback_data": "code_dur_0"}],
+                    [{"text": "❌ Cancel", "callback_data": "code_manager"}]
+                ]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
+
+            elif data.startswith("code_dur_"):
+                if not self.is_admin(user_id):
+                    return
+                days_str = data.replace("code_dur_", "")
+                days = None if days_str == '0' else int(days_str)
+                self.code_sessions[user_id] = {
+                    'stage': 'waiting_max_uses',
+                    'days':  days
+                }
+                label = "No Expiry" if days is None else f"{days} Day(s)"
+                text = (f"🔑 Duration: <b>{label}</b>\n\n"
+                        "Select max number of uses\n"
+                        "(how many different users can redeem this code):")
+                keyboard = {"inline_keyboard": [
+                    [{"text": "1",   "callback_data": "code_uses_1"},
+                     {"text": "5",   "callback_data": "code_uses_5"},
+                     {"text": "10",  "callback_data": "code_uses_10"}],
+                    [{"text": "25",  "callback_data": "code_uses_25"},
+                     {"text": "50",  "callback_data": "code_uses_50"},
+                     {"text": "100", "callback_data": "code_uses_100"}],
+                    [{"text": "Unlimited", "callback_data": "code_uses_0"}],
+                    [{"text": "❌ Cancel", "callback_data": "code_manager"}]
+                ]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
+
+            elif data.startswith("code_uses_"):
+                if not self.is_admin(user_id):
+                    return
+                if user_id not in self.code_sessions:
+                    self.answer_callback_query(callback_query['id'], "❌ Session expired.", True)
+                    return
+                uses_str = data.replace("code_uses_", "")
+                max_uses = 0 if uses_str == '0' else int(uses_str)
+                self.code_sessions[user_id]['max_uses'] = max_uses
+                self.code_sessions[user_id]['stage'] = 'waiting_description'
+                uses_label = "Unlimited" if max_uses == 0 else str(max_uses)
+                days = self.code_sessions[user_id].get('days')
+                dur_label = "No Expiry" if days is None else f"{days} Day(s)"
+                text = (f"🔑 Duration: <b>{dur_label}</b> | Max uses: <b>{uses_label}</b>\n\n"
+                        "Send a short description for this code\n"
+                        "(e.g. 'Beta testers' or 'Friends only'),\n"
+                        "or send <code>skip</code> to skip:")
+                keyboard = {"inline_keyboard": [[{"text": "❌ Cancel", "callback_data": "code_manager"}]]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                # Now we need text input — can't use callback for this
+                return
+
+            elif data.startswith("deactivate_code_"):
+                if not self.is_admin(user_id):
+                    return
+                code_str = data.replace("deactivate_code_", "")
+                ok = self.admin_codes.deactivate_code(user_id, code_str)
+                self.answer_callback_query(
+                    callback_query['id'],
+                    "✅ Code deactivated." if ok else "❌ Could not deactivate.",
+                    True
+                )
+                # Refresh manager
+                codes = self.admin_codes.list_codes(user_id)
+                text = "🔑 <b>Admin Code Manager</b>\n\n"
+                for c in codes[:10]:
+                    code_val, expires, max_uses, used, active, desc = c
+                    status = "✅" if active else "❌"
+                    exp_str = expires[:10] if expires and expires[:4] != '9999' else "No expiry"
+                    text += f"{status} <code>{code_val}</code> — {used}/{max_uses} uses — exp: {exp_str}\n"
+                keyboard = {"inline_keyboard": [
+                    [{"text": "➕ Create New Code", "callback_data": "create_code_start"}],
                     [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
                 ]}
                 self.edit_message(chat_id, message_id, text, keyboard)
@@ -2447,13 +2780,32 @@ Choose an option:"""
                 self.cancel_broadcast(user_id, chat_id, message_id)
                 return
                 
+            elif data == "broadcast_add_button":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                if user_id not in self.broadcast_sessions:
+                    self.answer_callback_query(callback_query['id'], "❌ No active broadcast.", True)
+                    return
+                self.broadcast_sessions[user_id]['stage'] = 'waiting_button_text'
+                self.edit_message(chat_id, message_id,
+                    "🔘 <b>Add Inline Button</b>\n\nSend the button label text (e.g. 'Visit Website'):",
+                    {"inline_keyboard": [[{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]]})
+                return
+
             elif data == "edit_broadcast":
                 if not self.is_admin(user_id):
-                    self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
                     return
                 if user_id in self.broadcast_sessions:
-                    self.broadcast_sessions[user_id]['stage'] = 'waiting_message_or_photo'
-                    self.edit_message(chat_id, message_id, "✏️ Please type your new broadcast message or send a photo:", self.create_broadcast_panel_buttons())
+                    session = self.broadcast_sessions[user_id]
+                    session['stage'] = 'waiting_message_or_media'
+                    session['photo'] = None
+                    session['video'] = None
+                    session['buttons'] = []
+                    self.edit_message(chat_id, message_id,
+                        "✏️ Broadcast reset. Send your new message, photo, or video:",
+                        {"inline_keyboard": [[{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]]})
                 return
 
             # Mini-games callbacks
@@ -2586,7 +2938,7 @@ Choose an option:"""
 🎮 Available Games:
 • PSP Games (ISO/CSO)
 • PS1 Games
-• Android Games (APK)
+• Android Games (APK / XAPK / APKS)
 • Emulator Games
 • And much more!
 
@@ -2697,7 +3049,17 @@ Have fun! 🎉"""
                 games = self.games_cache.get('apk', [])
                 text = self.format_games_list(games, "APK")
                 self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
-                
+
+            elif data == "game_xapk":
+                games = self.games_cache.get('xapk', [])
+                text = self.format_games_list(games, "XAPK")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+
+            elif data == "game_apks":
+                games = self.games_cache.get('apks', [])
+                text = self.format_games_list(games, "APKS")
+                self.edit_message(chat_id, message_id, text, self.create_game_files_buttons())
+
             elif data == "game_psp":
                 cso_games = self.games_cache.get('cso', [])
                 pbp_games = self.games_cache.get('pbp', [])
@@ -2748,28 +3110,31 @@ Choose an option below:"""
             elif data == "verify_channel":
                 if self.check_channel_membership(user_id):
                     self.mark_channel_joined(user_id)
-                    welcome_text = f"""✅ <b>Verification Complete!</b>
 
-👋 Welcome {first_name}!
+                    # Credit referral token now that both steps are complete
+                    self.referral.complete_referral(user_id)
 
-🎉 You now have full access to:
-• 🎮 Game File Browser  
-• 💰 Premium Games
-• 🔍 Game Search
-• 📁 All Game Categories
-• 🕒 Real-time Updates
-• 🎮 Mini-Games
-• ⭐ Stars Donations
-• 🎮 Game Requests
-
-📢 Channel: {self.REQUIRED_CHANNEL}
-Choose an option below:"""
+                    welcome_text = (
+                        f"✅ <b>Verification Complete!</b>\n\n"
+                        f"👋 Welcome {first_name}!\n\n"
+                        f"🎉 You now have full access:\n"
+                        f"• 🎮 Game File Browser\n"
+                        f"• 💰 Premium Games\n"
+                        f"• 🔍 Game Search\n"
+                        f"• 🎮 Mini-Games\n"
+                        f"• ⭐ Stars Donations\n"
+                        f"• 📝 Game Requests\n\n"
+                        f"📢 Channel: {self.REQUIRED_CHANNEL}\n"
+                        f"Choose an option below:"
+                    )
                     self.edit_message(chat_id, message_id, welcome_text, self.create_main_menu_buttons(user_id))
                 else:
-                    self.edit_message(chat_id, message_id,
-                                    f"❌ You haven't joined the channel yet!\n\n"
-                                    f"Please join {self.REQUIRED_CHANNEL} first, then click Verify Join again.",
-                                    self.create_channel_buttons())
+                    self.edit_message(
+                        chat_id, message_id,
+                        f"❌ You haven't joined the channel yet!\n\n"
+                        f"Please join {self.REQUIRED_CHANNEL} first, then tap Verify Join again.",
+                        self.create_channel_buttons()
+                    )
             
             elif data == "admin_panel":
                 if not self.is_admin(user_id):
@@ -2848,7 +3213,7 @@ Choose an option:"""
                 "document": file_id
             }
             
-            response = requests.post(url, data=data, timeout=30)
+            response = _tg_session.post(url, data=data, timeout=30)
             result = response.json()
             
             if result.get('ok'):
@@ -2881,7 +3246,7 @@ Choose an option:"""
                         "chat_id": chat_id,
                         "document": file_id
                     }
-                    response = requests.post(url, data=data, timeout=30)
+                    response = _tg_session.post(url, data=data, timeout=30)
                     result = response.json()
                     if result.get('ok'):
                         print(f"✅ Successfully sent bot file {message_id} by file_id")
@@ -2900,7 +3265,7 @@ Choose an option:"""
                     "message_id": message_id
                 }
                 
-                response = requests.post(url, data=data, timeout=30)
+                response = _tg_session.post(url, data=data, timeout=30)
                 result = response.json()
                 
                 if result.get('ok'):
@@ -2982,7 +3347,7 @@ This game already exists in the database:"""
                 self.robust_send_message(chat_id, duplicate_text)
                 return True
             
-            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk']
+            game_extensions = ['.zip', '.7z', '.iso', '.rar', '.pkg', '.cso', '.pbp', '.cs0', '.apk', '.xapk', '.apks']
             if not any(file_name.lower().endswith(ext) for ext in game_extensions):
                 self.robust_send_message(chat_id, f"❌ File type not supported: {file_name}")
                 print(f"❌ Unsupported file type: {file_name}")
@@ -3656,7 +4021,7 @@ Choose the type of game to upload:
 • Set your price in Stars
 • Users pay to download
 
-📁 Both support all file formats (ZIP, ISO, APK, etc.)"""
+📁 Both support all file formats (ZIP, ISO, APK, XAPK, APKS, etc.)"""
 
         keyboard = {
             "inline_keyboard": [
@@ -3737,7 +4102,7 @@ Choose the type of game to upload:
             f"⭐ Price: {self.upload_sessions[user_id]['stars_price']} Stars\n"
             f"📝 Description: {description if description else 'No description'}\n\n"
             "📁 <b>Now please upload the game file</b>\n"
-            "Supported formats: ZIP, 7Z, ISO, APK, RAR, PKG, CSO, PBP"
+            "Supported formats: ZIP, 7Z, ISO, APK, XAPK, APKS, RAR, PKG, CSO, PBP"
         )
         return True
     
@@ -3997,7 +4362,7 @@ Thank you for using our service! 🙏"""
                 }
                 
                 try:
-                    requests.post(photo_url, data=photo_data, timeout=30)
+                    _tg_session.post(photo_url, data=photo_data, timeout=30)
                 except Exception as e:
                     print(f"❌ Failed to send photo reply: {e}")
             
@@ -4012,210 +4377,244 @@ Thank you for using our service! 🙏"""
     # ==================== ENHANCED BROADCAST SYSTEM ====================
     
     def start_broadcast_with_photo(self, user_id, chat_id):
-        """Start broadcast message creation with photo option"""
+        """Start broadcast message creation — supports text, photo, and video with optional inline buttons"""
         if not self.is_admin(user_id):
             self.robust_send_message(chat_id, "❌ Access denied. Admin only.")
             return False
-            
+
         self.broadcast_sessions[user_id] = {
-            'stage': 'waiting_message_or_photo',
+            'stage': 'waiting_message_or_media',
             'message': '',
             'photo': None,
+            'video': None,
+            'buttons': [],          # list of {"text": ..., "url": ...}
             'chat_id': chat_id
         }
-        
+
         broadcast_info = """📢 <b>Admin Broadcast System</b>
 
-You can send messages to all bot subscribers.
+Send a message to all verified subscribers.
 
-📝 <b>How to use:</b>
-1. Type your broadcast message OR send a photo with caption
-2. Preview the message before sending
-3. Send to all users or cancel
+📝 <b>Step 1 — Content:</b>
+• Type a text message, OR
+• Send a photo with optional caption, OR
+• Send a video with optional caption
 
-⚡ <b>Features:</b>
-• HTML formatting support
-• Photo attachments
-• Preview before sending
-• Send to all verified users
-• Delivery statistics
+💡 HTML formatting is supported in text."""
 
-💡 <b>Type your broadcast message or send a photo now:</b>"""
-        
         keyboard = {
             "inline_keyboard": [
-                [{"text": "❌ Cancel Broadcast", "callback_data": "cancel_broadcast"}]
+                [{"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]
             ]
         }
-        
+
         self.robust_send_message(chat_id, broadcast_info, keyboard)
         return True
     
+    def _advance_to_buttons_stage(self, user_id, chat_id, media_type, preview_label):
+        """After content is set, ask admin if they want to add inline URL buttons"""
+        session = self.broadcast_sessions[user_id]
+        session['stage'] = 'waiting_buttons'
+
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "➕ Add Button (URL)", "callback_data": "broadcast_add_button"}],
+                [{"text": "✅ Send Now (No Buttons)", "callback_data": "confirm_broadcast"},
+                 {"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]
+            ]
+        }
+        self.robust_send_message(chat_id,
+            f"📋 <b>Broadcast Preview</b>\n\n"
+            f"📎 Content: {preview_label}\n\n"
+            f"<b>Step 2 — Inline Buttons (optional):</b>\n"
+            f"Add URL buttons that appear below the message, or send directly.",
+            keyboard
+        )
+
+    def handle_broadcast_message(self, user_id, chat_id, text):
+        """Handle broadcast text input"""
+        if user_id not in self.broadcast_sessions:
+            return False
+
+        session = self.broadcast_sessions[user_id]
+
+        if session['stage'] == 'waiting_message_or_media':
+            session['message'] = text
+            self._advance_to_buttons_stage(user_id, chat_id, 'text',
+                                           f"📝 Text ({len(text)} chars)")
+            return True
+
+        if session['stage'] == 'waiting_button_text':
+            session['_pending_button_text'] = text
+            session['stage'] = 'waiting_button_url'
+            self.robust_send_message(chat_id, "🔗 Now send the URL for this button (must start with https://):")
+            return True
+
+        if session['stage'] == 'waiting_button_url':
+            if not text.startswith(('http://', 'https://')):
+                self.robust_send_message(chat_id, "❌ URL must start with http:// or https://. Try again:")
+                return True
+            btn_text = session.pop('_pending_button_text', 'Button')
+            session['buttons'].append({"text": btn_text, "url": text})
+            session['stage'] = 'waiting_buttons'
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "➕ Add Another Button", "callback_data": "broadcast_add_button"}],
+                    [{"text": "✅ Send Now", "callback_data": "confirm_broadcast"},
+                     {"text": "❌ Cancel", "callback_data": "cancel_broadcast"}]
+                ]
+            }
+            self.robust_send_message(chat_id,
+                f"✅ Button added: <b>{btn_text}</b>\n"
+                f"Total buttons: {len(session['buttons'])}\n\n"
+                "Add more or send the broadcast now.", keyboard)
+            return True
+
+        return False
+
     def handle_broadcast_photo(self, user_id, chat_id, photo_file_id, caption):
         """Handle broadcast photo input"""
         if user_id not in self.broadcast_sessions:
             return False
-            
+
         session = self.broadcast_sessions[user_id]
-        
-        if session['stage'] == 'waiting_message_or_photo':
-            session['stage'] = 'preview'
+        if session['stage'] == 'waiting_message_or_media':
             session['photo'] = photo_file_id
             session['message'] = caption or ""
-            
-            preview_text = f"""📋 <b>Broadcast Preview</b>
-
-📷 <b>Photo Broadcast</b>
-💬 Caption: {caption if caption else 'No caption'}
-
-📊 This broadcast will be sent to all verified users.
-
-⚠️ <b>Please review carefully before sending!</b>"""
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ Send to All Users", "callback_data": "confirm_broadcast"},
-                        {"text": "✏️ Edit Message", "callback_data": "edit_broadcast"}
-                    ],
-                    [
-                        {"text": "❌ Cancel", "callback_data": "cancel_broadcast"}
-                    ]
-                ]
-            }
-            
-            photo_url = self.base_url + "sendPhoto"
-            photo_data = {
-                "chat_id": chat_id,
-                "photo": photo_file_id,
-                "caption": preview_text,
-                "reply_markup": json.dumps(keyboard),
-                "parse_mode": "HTML"
-            }
-            
+            self._advance_to_buttons_stage(user_id, chat_id, 'photo',
+                                           f"📷 Photo + caption: {caption[:40] if caption else 'none'}")
+            # Send preview photo to admin
             try:
-                response = requests.post(photo_url, data=photo_data, timeout=30)
-                result = response.json()
-                if result.get('ok'):
-                    print(f"✅ Photo preview sent to admin {user_id}")
-                    return True
-                else:
-                    print(f"❌ Failed to send photo preview: {result.get('description')}")
-                    return False
-            except Exception as e:
-                print(f"❌ Error sending photo preview: {e}")
-                return False
-            
+                _tg_session.post(self.base_url + "sendPhoto", data={
+                    "chat_id": chat_id,
+                    "photo": photo_file_id,
+                    "caption": f"👆 Preview of your broadcast photo\nCaption: {caption or '(none)'}",
+                    "parse_mode": "HTML"
+                }, timeout=15)
+            except Exception:
+                pass
+            return True
+        return False
+
+    def handle_broadcast_video(self, user_id, chat_id, video_file_id, caption):
+        """Handle broadcast video input"""
+        if user_id not in self.broadcast_sessions:
+            return False
+
+        session = self.broadcast_sessions[user_id]
+        if session['stage'] == 'waiting_message_or_media':
+            session['video'] = video_file_id
+            session['message'] = caption or ""
+            self._advance_to_buttons_stage(user_id, chat_id, 'video',
+                                           f"🎥 Video + caption: {caption[:40] if caption else 'none'}")
+            # Send preview note to admin (can't re-send video in preview easily without forwarding)
+            self.robust_send_message(chat_id, "🎥 Video received and queued for broadcast.")
+            return True
         return False
     
     def send_broadcast_to_all_enhanced(self, user_id, chat_id):
-        """Send enhanced broadcast (text or photo) to all users"""
+        """Send broadcast (text / photo / video) with optional inline buttons to all verified users"""
         if user_id not in self.broadcast_sessions:
             self.robust_send_message(chat_id, "❌ No active broadcast session.")
             return False
-            
+
         session = self.broadcast_sessions[user_id]
-        
+
         cursor = self.conn.cursor()
         cursor.execute('SELECT user_id FROM users WHERE is_verified = 1')
         users = cursor.fetchall()
-        
+
         total_users = len(users)
         if total_users == 0:
-            self.robust_send_message(chat_id, "❌ No verified users found to send broadcast.")
+            self.robust_send_message(chat_id, "❌ No verified users found.")
             del self.broadcast_sessions[user_id]
             return False
-        
-        progress_msg = self.robust_send_message(chat_id, 
-            f"📤 Starting broadcast...\n"
-            f"📊 Total users: {total_users}\n"
-            f"⏳ Sending messages..."
-        )
-        
+
+        self.robust_send_message(chat_id,
+            f"📤 Starting broadcast to {total_users} users...")
+
         success_count = 0
         failed_count = 0
         start_time = time.time()
-        
-        has_photo = session['photo'] is not None
-        message_text = f"📢 <b>Announcement from Admin</b>\n\n{session['message']}\n\n────────────────────\n<i>This is an automated broadcast message</i>"
-        
-        for i, (user_id_target,) in enumerate(users):
+
+        has_photo  = bool(session.get('photo'))
+        has_video  = bool(session.get('video'))
+        buttons    = session.get('buttons', [])
+        msg_text   = (f"📢 <b>Announcement from Admin</b>\n\n"
+                      f"{session['message']}\n\n"
+                      f"────────────────────\n"
+                      f"<i>This is an automated broadcast</i>")
+
+        # Build reply_markup if any buttons were added
+        reply_markup = None
+        if buttons:
+            reply_markup = json.dumps({
+                "inline_keyboard": [[{"text": b["text"], "url": b["url"]}] for b in buttons]
+            })
+
+        for i, (uid,) in enumerate(users):
             try:
                 if has_photo:
-                    photo_url = self.base_url + "sendPhoto"
-                    photo_data = {
-                        "chat_id": user_id_target,
+                    payload = {
+                        "chat_id": uid,
                         "photo": session['photo'],
-                        "caption": message_text,
+                        "caption": msg_text,
                         "parse_mode": "HTML"
                     }
-                    response = requests.post(photo_url, data=photo_data, timeout=30)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get('ok'):
-                            success_count += 1
-                        else:
-                            failed_count += 1
-                    else:
-                        failed_count += 1
-                else:
-                    response = requests.post(self.base_url + "sendMessage", data={
-                        "chat_id": user_id_target,
-                        "text": message_text,
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
+                    r = _tg_session.post(self.base_url + "sendPhoto", data=payload, timeout=30)
+
+                elif has_video:
+                    payload = {
+                        "chat_id": uid,
+                        "video": session['video'],
+                        "caption": msg_text,
                         "parse_mode": "HTML"
-                    }, timeout=30)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get('ok'):
-                            success_count += 1
-                        else:
-                            failed_count += 1
-                    else:
-                        failed_count += 1
-                
-                if (i + 1) % 10 == 0 or (i + 1) == total_users:
-                    progress = int((i + 1) * 100 / total_users)
+                    }
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
+                    r = _tg_session.post(self.base_url + "sendVideo", data=payload, timeout=60)
+
+                else:
+                    payload = {
+                        "chat_id": uid,
+                        "text": msg_text,
+                        "parse_mode": "HTML"
+                    }
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
+                    r = _tg_session.post(self.base_url + "sendMessage", data=payload, timeout=30)
+
+                if r.status_code == 200 and r.json().get('ok'):
+                    success_count += 1
+                else:
+                    failed_count += 1
+
+                # Progress update every 20 users
+                if (i + 1) % 20 == 0:
                     elapsed = time.time() - start_time
-                    eta = (elapsed / (i + 1)) * (total_users - (i + 1)) if (i + 1) > 0 else 0
-                    
-                    progress_text = f"""📤 <b>Broadcast Progress</b>
+                    pct = int((i + 1) * 100 / total_users)
+                    self.robust_send_message(chat_id,
+                        f"📤 Progress: {i+1}/{total_users} ({pct}%)\n"
+                        f"✅ {success_count} | ❌ {failed_count} | ⏱ {elapsed:.0f}s")
 
-📊 Progress: {i + 1}/{total_users} users
-{self.create_progress_bar(progress)} {progress}%
+                time.sleep(0.05)  # ~20 msg/s — well under Telegram's 30/s limit
 
-✅ Successful: {success_count}
-❌ Failed: {failed_count}
-⏱️ Elapsed: {elapsed:.1f}s
-⏳ ETA: {eta:.1f}s
-
-Sending messages..."""
-                    
-                    self.robust_send_message(chat_id, progress_text)
-                
-                time.sleep(0.1)
-                
             except Exception as e:
                 failed_count += 1
-                print(f"❌ Broadcast error for user {user_id_target}: {e}")
-        
+                print(f"❌ Broadcast error for {uid}: {e}")
+
         elapsed_total = time.time() - start_time
-        success_rate = (success_count / total_users) * 100 if total_users > 0 else 0
-        
-        broadcast_type = "Photo" if has_photo else "Text"
-        stats_text = f"""✅ <b>Broadcast Completed!</b>
+        media_type = "Video" if has_video else "Photo" if has_photo else "Text"
+        btn_info = f" + {len(buttons)} button(s)" if buttons else ""
 
-📊 Final Statistics:
-• 📤 Total users: {total_users}
-• ✅ Successful: {success_count}
-• ❌ Failed: {failed_count}
-• 📈 Success rate: {success_rate:.1f}%
-• ⏱️ Total time: {elapsed_total:.1f}s
-• 🚀 Speed: {total_users/elapsed_total:.1f} users/second
-• 📝 Type: {broadcast_type} Broadcast
-
-📝 Message sent to {success_count} users successfully."""
+        stats = (
+            f"✅ <b>Broadcast Complete!</b>\n\n"
+            f"📊 {success_count}/{total_users} delivered\n"
+            f"❌ {failed_count} failed\n"
+            f"⏱ {elapsed_total:.1f}s | 📝 {media_type}{btn_info}"
+        )
 
         broadcast_id = int(time.time())
         self.broadcast_stats[broadcast_id] = {
@@ -4224,14 +4623,13 @@ Sending messages..."""
             'total_users': total_users,
             'success_count': success_count,
             'failed_count': failed_count,
-            'type': 'photo' if has_photo else 'text',
-            'message_preview': session['message'][:100] + "..." if len(session['message']) > 100 else session['message']
+            'type': media_type.lower(),
+            'buttons': len(buttons),
+            'message_preview': session['message'][:100]
         }
-        
-        self.robust_send_message(chat_id, stats_text)
-        
+
+        self.robust_send_message(chat_id, stats)
         del self.broadcast_sessions[user_id]
-        
         return True
 
     # ==================== STARS PAYMENT METHODS ====================
@@ -4555,45 +4953,6 @@ All requests have been processed!"""
 
     # ==================== BROADCAST MESSAGING SYSTEM ====================
     
-    def handle_broadcast_message(self, user_id, chat_id, text):
-        """Handle broadcast message input"""
-        if user_id not in self.broadcast_sessions:
-            return False
-            
-        session = self.broadcast_sessions[user_id]
-        
-        if session['stage'] == 'waiting_message_or_photo':
-            session['stage'] = 'preview'
-            session['message'] = text
-            
-            preview_text = f"""📋 <b>Broadcast Preview</b>
-
-Your message:
-────────────────────
-{text}
-────────────────────
-
-📊 This message will be sent to all verified users.
-
-⚠️ <b>Please review carefully before sending!</b>"""
-            
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ Send to All Users", "callback_data": "confirm_broadcast"},
-                        {"text": "✏️ Edit Message", "callback_data": "edit_broadcast"}
-                    ],
-                    [
-                        {"text": "❌ Cancel", "callback_data": "cancel_broadcast"}
-                    ]
-                ]
-            }
-            
-            self.robust_send_message(chat_id, preview_text, keyboard)
-            return True
-            
-        return False
-    
     def get_broadcast_stats(self, user_id, chat_id, message_id):
         """Show broadcast statistics"""
         if not self.is_admin(user_id):
@@ -4723,7 +5082,7 @@ Use the broadcast feature to send messages to all users."""
                 if reply_markup:
                     data["reply_markup"] = json.dumps(reply_markup)
                 
-                response = requests.post(url, data=data, timeout=15)
+                response = _tg_session.post(url, data=data, timeout=15)
                 result = response.json()
                 
                 if result.get('ok'):
@@ -4815,10 +5174,35 @@ Use the broadcast feature to send messages to all users."""
             # users migrations (also done by ReferralSystem but guard here too)
             cursor.execute("PRAGMA table_info(users)")
             u_cols = [c[1] for c in cursor.fetchall()]
-            for col, default in [('game_tokens', '0'), ('total_referrals', '0'), ('referred_by', '0')]:
+            for col, default in [('game_tokens', '0'), ('total_referrals', '0'), ('referred_by', '0'), ('pending_referrer_id', '0')]:
                 if col not in u_cols:
                     cursor.execute(f'ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT {default}')
                     print(f"✅ Added {col} to users")
+
+            # admin_codes tables — create if missing (safe for existing DBs)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_codes (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code        TEXT UNIQUE NOT NULL,
+                    created_by  INTEGER NOT NULL,
+                    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at  DATETIME NOT NULL,
+                    max_uses    INTEGER DEFAULT 1,
+                    used_count  INTEGER DEFAULT 0,
+                    is_active   INTEGER DEFAULT 1,
+                    description TEXT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_code_uses (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code_id    INTEGER NOT NULL,
+                    user_id    INTEGER NOT NULL,
+                    used_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(code_id, user_id),
+                    FOREIGN KEY (code_id) REFERENCES admin_codes(id)
+                )
+            ''')
 
             self.conn.commit()
             return True
@@ -5379,6 +5763,10 @@ Always available!
         
         if filename_lower.endswith('.apk'):
             return 'Android Games'
+        elif filename_lower.endswith('.xapk'):
+            return 'Android Games'
+        elif filename_lower.endswith('.apks'):
+            return 'Android Games'
         elif filename_lower.endswith('.iso'):
             if 'psp' in filename_lower:
                 return 'PSP Games'
@@ -5454,6 +5842,11 @@ Always available!
             print(f"📁 Database path: {db_path}")
             
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.conn.execute("PRAGMA journal_mode=WAL")   # non-blocking concurrent reads
+            self.conn.execute("PRAGMA synchronous=NORMAL") # faster writes, safe with WAL
+            self.conn.execute("PRAGMA cache_size=-8000")   # 8 MB page cache
+            self.conn.execute("PRAGMA temp_store=MEMORY")
+            self.conn.row_factory = None
             cursor = self.conn.cursor()
             
             cursor.execute('''
@@ -5468,7 +5861,8 @@ Always available!
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     game_tokens INTEGER DEFAULT 0,
                     total_referrals INTEGER DEFAULT 0,
-                    referred_by INTEGER DEFAULT 0
+                    referred_by INTEGER DEFAULT 0,
+                    pending_referrer_id INTEGER DEFAULT 0
                 )
             ''')
             
@@ -5576,9 +5970,34 @@ Always available!
                     status TEXT DEFAULT 'completed'
                 )
             ''')
-            
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_codes (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code        TEXT UNIQUE NOT NULL,
+                    created_by  INTEGER NOT NULL,
+                    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at  DATETIME NOT NULL,
+                    max_uses    INTEGER DEFAULT 1,
+                    used_count  INTEGER DEFAULT 0,
+                    is_active   INTEGER DEFAULT 1,
+                    description TEXT
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admin_code_uses (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code_id    INTEGER NOT NULL,
+                    user_id    INTEGER NOT NULL,
+                    used_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(code_id, user_id),
+                    FOREIGN KEY (code_id) REFERENCES admin_codes(id)
+                )
+            ''')
+
             cursor.execute('INSERT OR IGNORE INTO stars_balance (id) VALUES (1)')
-            
+
             self.conn.commit()
             print("✅ Database setup successful!")
             
@@ -5599,7 +6018,7 @@ Always available!
     def test_bot_connection(self):
         try:
             url = self.base_url + "getMe"
-            response = requests.get(url, timeout=10)
+            response = _tg_session.get(url, timeout=10)
             data = response.json()
             
             if data.get('ok'):
@@ -5670,8 +6089,8 @@ Always available!
             games = cursor.fetchall()
             
             self.games_cache = {
-                'zip': [], '7z': [], 'iso': [], 'apk': [], 'rar': [], 
-                'pkg': [], 'cso': [], 'pbp': [], 'recent': [], 'all': []
+                'zip': [], '7z': [], 'iso': [], 'apk': [], 'xapk': [], 'apks': [],
+                'rar': [], 'pkg': [], 'cso': [], 'pbp': [], 'recent': [], 'all': []
             }
             
             for game in games:
@@ -5725,14 +6144,38 @@ Always available!
         return ''.join(secrets.choice('0123456789') for _ in range(6))
     
     def save_verification_code(self, user_id, username, first_name, code):
+        """
+        Save a new verification code for the user.
+        Uses INSERT OR IGNORE so existing rows are never reset, then
+        updates only the code-related columns.
+        Verified users are never touched — the code is simply not saved for them.
+        """
         try:
+            # Guard: never overwrite a fully-completed user
+            if self.is_user_completed(user_id):
+                print(f"ℹ️ Skipping code save for already-verified user {user_id}")
+                return True
+
             expires = datetime.now() + timedelta(minutes=10)
             cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO users 
-                (user_id, username, first_name, verification_code, code_expires, is_verified, joined_channel)
-                VALUES (?, ?, ?, ?, ?, 0, 0)
-            ''', (user_id, username, first_name, code, expires))
+
+            # Ensure the row exists without overwriting any existing columns
+            cursor.execute(
+                'INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)',
+                (user_id, username, first_name)
+            )
+
+            # Only update the code-specific fields — never touch is_verified,
+            # joined_channel, game_tokens, referred_by, pending_referrer_id
+            cursor.execute(
+                '''UPDATE users
+                   SET username = ?,
+                       first_name = ?,
+                       verification_code = ?,
+                       code_expires = ?
+                   WHERE user_id = ?''',
+                (username, first_name, code, expires, user_id)
+            )
             self.conn.commit()
             print(f"✅ Verification code saved for user {user_id}: {code}")
             return True
@@ -5780,7 +6223,7 @@ Always available!
                 "chat_id": self.REQUIRED_CHANNEL,
                 "user_id": user_id
             }
-            response = requests.post(url, data=data, timeout=10)
+            response = _tg_session.post(url, data=data, timeout=10)
             result = response.json()
             
             if result.get('ok'):
@@ -5844,7 +6287,7 @@ Always available!
             if reply_markup:
                 data["reply_markup"] = json.dumps(reply_markup)
             
-            response = requests.post(url, data=data, timeout=15)
+            response = _tg_session.post(url, data=data, timeout=15)
             return response.json().get('ok', False)
         except Exception as e:
             print(f"Edit message error: {e}")
@@ -5858,7 +6301,7 @@ Always available!
                 data["text"] = text
             if show_alert:
                 data["show_alert"] = True
-            requests.post(url, data=data, timeout=5)
+            _tg_session.post(url, data=data, timeout=5)
         except Exception as e:
             print(f"⚠️ answer_callback_query error: {e}")
     
@@ -5866,7 +6309,7 @@ Always available!
         try:
             url = self.base_url + "getUpdates"
             params = {"timeout": 100, "offset": offset}
-            response = requests.get(url, params=params, timeout=110)
+            response = _tg_session.get(url, params=params, timeout=110)
             data = response.json()
             return data.get('result', []) if data.get('ok') else []
         except Exception as e:
@@ -5954,33 +6397,38 @@ Type your game name now!"""
     def handle_profile(self, chat_id, message_id, user_id, first_name):
         try:
             cursor = self.conn.cursor()
-            cursor.execute('SELECT created_at, is_verified, joined_channel FROM users WHERE user_id = ?', (user_id,))
+            cursor.execute(
+                'SELECT created_at, is_verified, joined_channel, game_tokens, total_referrals, referred_by FROM users WHERE user_id = ?',
+                (user_id,)
+            )
             result = cursor.fetchone()
-            
+
             if result:
-                created_at, is_verified, joined_channel = result
-                profile_text = f"""👤 <b>User Profile</b>
-
-🆔 User ID: <code>{user_id}</code>
-👋 Name: {first_name}
-✅ Verified: {'Yes' if is_verified else 'No'}
-📢 Channel Joined: {'Yes' if joined_channel else 'No'}
-📅 Member Since: {created_at}
-
-💡 Your unique ID: <code>{user_id}</code>
-Use this ID for admin verification if needed."""
+                created_at, is_verified, joined_channel, tokens, referrals, referred_by = result
+                ref_link = self.referral.get_referral_link(user_id)
+                profile_text = (
+                    f"👤 <b>User Profile</b>\n\n"
+                    f"🆔 User ID: <code>{user_id}</code>\n"
+                    f"👋 Name: {html.escape(first_name)}\n"
+                    f"✅ Verified: {'Yes' if is_verified else 'No'}\n"
+                    f"📢 Channel Joined: {'Yes' if joined_channel else 'No'}\n"
+                    f"📅 Member Since: {created_at}\n\n"
+                    f"💎 Game Tokens: <b>{tokens or 0}</b>\n"
+                    f"👥 Referrals: <b>{referrals or 0}</b>\n\n"
+                    f"🔗 Your Referral Link:\n"
+                    f"<code>{ref_link}</code>"
+                )
             else:
-                profile_text = f"""👤 <b>User Profile</b>
-
-🆔 User ID: <code>{user_id}</code>
-👋 Name: {first_name}
-✅ Verified: No
-📢 Channel Joined: No
-
-💡 Complete verification with /start"""
+                profile_text = (
+                    f"👤 <b>User Profile</b>\n\n"
+                    f"🆔 User ID: <code>{user_id}</code>\n"
+                    f"👋 Name: {html.escape(first_name)}\n"
+                    f"✅ Verified: No\n\n"
+                    f"Complete verification with /start"
+                )
 
             self.edit_message(chat_id, message_id, profile_text, self.create_main_menu_buttons(user_id))
-            
+
         except Exception as e:
             print(f"Profile error: {e}")
 
@@ -6016,7 +6464,7 @@ Use this ID for admin verification if needed."""
                 if self.is_admin(user_id) and user_id in self.broadcast_sessions:
                     session = self.broadcast_sessions[user_id]
                     
-                    if session['stage'] == 'waiting_message_or_photo':
+                if session['stage'] == 'waiting_message_or_media':
                         if 'photo' in message:
                             photo = message['photo'][-1]
                             photo_file_id = photo['file_id']
@@ -6048,21 +6496,23 @@ Use this ID for admin verification if needed."""
                     except ValueError:
                         pass
 
-                # Admin: add tokens to a user — addtokens USER_ID AMOUNT
-                if self.is_admin(user_id) and text.lower().startswith('addtokens '):
-                    parts = text.split()
-                    if len(parts) == 3:
-                        try:
-                            target_id = int(parts[1])
-                            amount    = int(parts[2])
-                            if self.referral.add_tokens(target_id, amount):
-                                self.robust_send_message(chat_id, f"✅ Added {amount} tokens to user {target_id}.")
-                            else:
-                                self.robust_send_message(chat_id, "❌ Failed to add tokens.")
-                        except ValueError:
-                            self.robust_send_message(chat_id, "❌ Usage: addtokens USER_ID AMOUNT")
+                # 6-digit admin code redemption (verified users only, not admins)
+                if (text.strip().isdigit() and len(text.strip()) == 6
+                        and self.is_user_completed(user_id)
+                        and not self.is_admin(user_id)):
+                    ok, msg = self.admin_codes.redeem(text.strip(), user_id)
+                    if ok:
+                        self.referral.add_tokens(user_id, 5)  # reward 5 tokens per code
+                        tokens = self.referral.get_tokens(user_id)
+                        self.robust_send_message(
+                            chat_id,
+                            f"🎉 <b>Code Redeemed!</b>\n\n"
+                            f"✅ {msg}\n"
+                            f"🎁 You received <b>5 Game Tokens</b>!\n"
+                            f"💎 Your balance: <b>{tokens} tokens</b>"
+                        )
                     else:
-                        self.robust_send_message(chat_id, "❌ Usage: addtokens USER_ID AMOUNT")
+                        self.robust_send_message(chat_id, f"❌ {msg}")
                     return True
                 
                 if user_id in self.search_sessions and self.search_sessions[user_id].get('mode') == 'remove':
@@ -6105,6 +6555,32 @@ Use this ID for admin verification if needed."""
                 
                 if user_id in self.broadcast_sessions:
                     return self.handle_broadcast_message(user_id, chat_id, text)
+
+                # Admin code creation — waiting for description
+                if user_id in self.code_sessions:
+                    session = self.code_sessions[user_id]
+                    if session.get('stage') == 'waiting_description':
+                        description = '' if text.strip().lower() == 'skip' else text.strip()
+                        days     = session.get('days')
+                        max_uses = session.get('max_uses', 1)
+                        try:
+                            code = self.admin_codes.create_code(user_id, days, max_uses, description)
+                            del self.code_sessions[user_id]
+                            dur_str = "No expiry" if days is None else f"{days} day(s)"
+                            uses_str = "Unlimited" if max_uses == 0 else str(max_uses)
+                            self.robust_send_message(
+                                chat_id,
+                                f"✅ <b>Code Created!</b>\n\n"
+                                f"🔑 Code: <code>{code}</code>\n"
+                                f"⏳ Duration: {dur_str}\n"
+                                f"👥 Max uses: {uses_str}\n"
+                                f"📝 Description: {description or 'none'}\n\n"
+                                f"Share this code with users — each user can only use it once.",
+                                self.create_admin_buttons()
+                            )
+                        except Exception as e:
+                            self.robust_send_message(chat_id, f"❌ Failed to create code: {e}")
+                        return True
                 
                 # Search mode: user typed after pressing Search Games
                 if self.search_mode.get(user_id) and not text.startswith('/'):
@@ -6230,19 +6706,28 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                 print(f"📸 Photo message received from user {message['from']['id']}")
                 user_id = message['from']['id']
                 chat_id = message['chat']['id']
-                
+
                 if user_id in self.broadcast_sessions:
-                    if self.broadcast_sessions[user_id]['stage'] == 'waiting_message_or_photo':
+                    if self.broadcast_sessions[user_id]['stage'] == 'waiting_message_or_media':
                         photo = message['photo'][-1]
-                        photo_file_id = photo['file_id']
                         caption = message.get('caption', '')
-                        return self.handle_broadcast_photo(user_id, chat_id, photo_file_id, caption)
-                
+                        return self.handle_broadcast_photo(user_id, chat_id, photo['file_id'], caption)
+
                 if user_id in self.reply_sessions and self.reply_sessions[user_id]['stage'] == 'waiting_photo':
                     photo = message['photo'][-1]
-                    photo_file_id = photo['file_id']
                     caption = message.get('caption', '')
-                    return self.handle_photo_reply(user_id, chat_id, photo_file_id, caption)
+                    return self.handle_photo_reply(user_id, chat_id, photo['file_id'], caption)
+
+            if 'video' in message:
+                print(f"🎥 Video message received from user {message['from']['id']}")
+                user_id = message['from']['id']
+                chat_id = message['chat']['id']
+
+                if user_id in self.broadcast_sessions:
+                    if self.broadcast_sessions[user_id]['stage'] == 'waiting_message_or_media':
+                        video_file_id = message['video']['file_id']
+                        caption = message.get('caption', '')
+                        return self.handle_broadcast_video(user_id, chat_id, video_file_id, caption)
             
             if 'document' in message and self.is_admin(message['from']['id']):
                 return self.handle_document_upload(message)
@@ -6255,173 +6740,179 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
             return False
 
     def handle_verification(self, message):
-        """Handle /start command — register user, process referral, send verification code"""
+        """
+        Handle /start command.
+        - Fully verified users go straight to the main menu (no re-verification).
+        - Referral link (?start=ref_ID) stores pending referrer — credited after full verification.
+        - Verification is one-time: completed users are never asked to re-verify.
+        """
         try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            username = message['from'].get('username', '')
+            user_id    = message['from']['id']
+            chat_id    = message['chat']['id']
+            username   = message['from'].get('username', '')
             first_name = message['from']['first_name']
-            text = message.get('text', '/start')
+            text       = message.get('text', '/start').strip()
 
-            print(f"🔐 Verification requested by {first_name} ({user_id})")
+            print(f"🔐 /start from {first_name} ({user_id}): '{text}'")
 
-            # Parse referral parameter from /start ref_XXXXX
+            # ── Parse referral parameter ──────────────────────────────────────
             referrer_id = None
             parts = text.split()
             if len(parts) > 1 and parts[1].startswith('ref_'):
                 try:
-                    referrer_id = int(parts[1].replace('ref_', ''))
-                    if referrer_id == user_id:
-                        referrer_id = None  # can't refer yourself
+                    rid = int(parts[1].replace('ref_', ''))
+                    if rid != user_id:
+                        referrer_id = rid
                 except ValueError:
                     pass
 
-            # Register user if new
+            # ── Upsert user row (INSERT OR IGNORE keeps existing data) ────────
             cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-            if not cursor.fetchone():
-                cursor.execute(
-                    'INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)',
-                    (user_id, username, first_name)
-                )
-                self.conn.commit()
-                if referrer_id:
-                    self.referral.register_referral(referrer_id, user_id)
+            cursor.execute(
+                'INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)',
+                (user_id, username, first_name)
+            )
+            cursor.execute(
+                'UPDATE users SET username = ?, first_name = ? WHERE user_id = ?',
+                (username, first_name, user_id)
+            )
+            self.conn.commit()
 
+            # Store pending referral — no token yet, awarded after full verification
+            if referrer_id:
+                self.referral.store_pending_referral(referrer_id, user_id)
+
+            # ── Fully verified — go straight to menu ──────────────────────────
             if self.is_user_completed(user_id):
-                welcome_text = f"""👋 Welcome back {first_name}!
-
-✅ You're already verified!
-📢 Channel membership: Active
-
-Choose an option below:"""
-                self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons(user_id))
+                self.robust_send_message(
+                    chat_id,
+                    f"👋 <b>Welcome back {first_name}!</b>\n\n"
+                    f"✅ You're already verified — choose an option below:",
+                    self.create_main_menu_buttons(user_id)
+                )
                 return True
 
+            # ── Code verified, channel not yet joined ─────────────────────────
             if self.is_user_verified(user_id) and not self.check_channel_membership(user_id):
-                channel_text = f"""📢 <b>Channel Verification Required</b>
-
-👋 Hello {first_name}!
-
-✅ Code verification: Completed
-❌ Channel membership: Pending
-
-To access all features, please join our channel:
-
-🔗 {self.CHANNEL_LINK}
-
-After joining, click the button below:"""
-                self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
+                self.robust_send_message(
+                    chat_id,
+                    f"📢 <b>One Last Step!</b>\n\n"
+                    f"👋 Hello {first_name}!\n\n"
+                    f"✅ Code verification: Complete\n"
+                    f"❌ Channel membership: Pending\n\n"
+                    f"Join our channel to unlock everything:\n"
+                    f"🔗 {self.CHANNEL_LINK}\n\n"
+                    f"After joining tap <b>Verify Join</b> below:",
+                    self.create_channel_buttons()
+                )
                 return True
 
+            # ── In channel but code not yet verified ──────────────────────────
             if self.check_channel_membership(user_id) and not self.is_user_verified(user_id):
                 self.mark_channel_joined(user_id)
                 code = self.generate_code()
                 if self.save_verification_code(user_id, username, first_name, code):
-                    verify_text = f"""🔐 <b>Verification Required</b>
-
-👋 Hello {first_name}!
-
-✅ Channel membership: Verified
-❌ Code verification: Pending
-
-Your verification code: 
-<code>{code}</code>
-
-📝 Please reply with this code to complete verification.
-
-⏰ Code expires in 10 minutes."""
-                    self.robust_send_message(chat_id, verify_text)
-                    return True
+                    self.robust_send_message(
+                        chat_id,
+                        f"🔐 <b>Almost done, {first_name}!</b>\n\n"
+                        f"✅ Channel membership: Verified\n"
+                        f"❌ Code verification: Pending\n\n"
+                        f"Your verification code:\n"
+                        f"<code>{code}</code>\n\n"
+                        f"Reply with this code.  ⏰ Expires in 10 minutes."
+                    )
                 else:
-                    self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
-                    return True
+                    self.robust_send_message(chat_id, "❌ Error generating code. Please try /start again.")
+                return True
 
+            # ── Fresh user — issue verification code ──────────────────────────
             code = self.generate_code()
             if self.save_verification_code(user_id, username, first_name, code):
-                welcome_text = f"""🔐 <b>Welcome to PSP Gamers Bot!</b>
-
-👋 Hello {first_name}!
-
-To access our game collection, please complete two-step verification:
-
-📝 <b>Step 1: Code Verification</b>
-Your verification code: 
-<code>{code}</code>
-
-Reply with this code to verify.
-
-⏰ Code expires in 10 minutes.
-
-After code verification, you'll need to join our channel."""
-                self.robust_send_message(chat_id, welcome_text)
-                return True
+                referral_note = (
+                    "\n\n🎁 <b>You joined via a referral!</b> Complete verification to activate."
+                    if referrer_id else ""
+                )
+                self.robust_send_message(
+                    chat_id,
+                    f"🔐 <b>Welcome to {BOT_SERVICE_NAME}!</b>\n\n"
+                    f"👋 Hello {first_name}!\n\n"
+                    f"Two quick steps to access our game collection:\n\n"
+                    f"📝 <b>Step 1 — Enter this code:</b>\n"
+                    f"<code>{code}</code>\n\n"
+                    f"Reply with the code above.\n"
+                    f"⏰ Expires in 10 minutes.\n\n"
+                    f"You'll join our channel in Step 2.{referral_note}"
+                )
             else:
-                self.robust_send_message(chat_id, "❌ Error generating verification code. Please try again.")
-                return False
+                self.robust_send_message(chat_id, "❌ Error generating code. Please try /start again.")
+            return True
 
         except Exception as e:
-            print(f"❌ Verification handler error: {e}")
+            print(f"❌ handle_verification error: {e}")
+            traceback.print_exc()
             try:
-                self.robust_send_message(message['chat']['id'], "❌ Error starting verification. Please try again.")
+                self.robust_send_message(message['chat']['id'], "❌ Error. Please try /start again.")
             except Exception:
                 pass
             return False
 
     def handle_code_verification(self, message):
-        """Handle 6-digit code verification"""
+        """Handle 6-digit code entry. Awards referral token if user fully completes verification."""
         try:
-            user_id = message['from']['id']
-            chat_id = message['chat']['id']
-            text = message.get('text', '').strip()
+            user_id    = message['from']['id']
+            chat_id    = message['chat']['id']
+            text       = message.get('text', '').strip()
             first_name = message['from']['first_name']
-            
-            print(f"🔐 Code verification attempt by {first_name} ({user_id}): {text}")
-            
+
+            print(f"🔐 Code attempt by {first_name} ({user_id}): {text}")
+
             if not text.isdigit() or len(text) != 6:
                 return False
-            
-            if self.verify_code(user_id, text):
-                if self.check_channel_membership(user_id):
-                    self.mark_channel_joined(user_id)
-                    welcome_text = f"""✅ <b>Verification Complete!</b>
 
-👋 Welcome {first_name}!
-
-🎉 You now have full access to:
-• 🎮 Game File Browser  
-• 💰 Premium Games
-• 🔍 Game Search
-• 📁 All Game Categories
-• 🕒 Real-time Updates
-• 🎮 Mini-Games
-• ⭐ Stars Donations
-• 🎮 Game Requests
-
-📢 Channel: {self.REQUIRED_CHANNEL}
-Choose an option below:"""
-                    self.robust_send_message(chat_id, welcome_text, self.create_main_menu_buttons(user_id))
-                else:
-                    channel_text = f"""✅ <b>Code Verified!</b>
-
-👋 Hello {first_name}!
-
-✅ Code verification: Completed
-❌ Channel membership: Pending
-
-📝 <b>Step 2: Join Our Channel</b>
-
-To access all features, please join our channel:
-
-🔗 {self.CHANNEL_LINK}
-
-After joining, click the button below:"""
-                    self.robust_send_message(chat_id, channel_text, self.create_channel_buttons())
+            if not self.verify_code(user_id, text):
+                self.robust_send_message(
+                    chat_id,
+                    "❌ Invalid or expired code. Send /start to get a new one."
+                )
                 return True
+
+            # Code accepted — check channel membership
+            in_channel = self.check_channel_membership(user_id)
+            if in_channel:
+                self.mark_channel_joined(user_id)
+
+            if in_channel:
+                # Fully verified — credit referral token now
+                self.referral.complete_referral(user_id)
+
+                self.robust_send_message(
+                    chat_id,
+                    f"✅ <b>Verification Complete!</b>\n\n"
+                    f"👋 Welcome {first_name}!\n\n"
+                    f"🎉 You now have full access:\n"
+                    f"• 🎮 Game File Browser\n"
+                    f"• 💰 Premium Games\n"
+                    f"• 🔍 Game Search\n"
+                    f"• 🎮 Mini-Games\n"
+                    f"• ⭐ Stars Donations\n"
+                    f"• 📝 Game Requests\n\n"
+                    f"📢 Channel: {self.REQUIRED_CHANNEL}",
+                    self.create_main_menu_buttons(user_id)
+                )
             else:
-                self.robust_send_message(chat_id, "❌ Invalid or expired code. Please use /start to get a new code.")
-                return True
-                
+                self.robust_send_message(
+                    chat_id,
+                    f"✅ <b>Code Verified!</b>\n\n"
+                    f"👋 Hello {first_name}!\n\n"
+                    f"✅ Code verification: Complete\n"
+                    f"❌ Channel membership: Pending\n\n"
+                    f"📝 <b>Step 2 — Join our channel:</b>\n"
+                    f"🔗 {self.CHANNEL_LINK}\n\n"
+                    f"Tap <b>Verify Join</b> after joining:",
+                    self.create_channel_buttons()
+                )
+            return True
+
         except Exception as e:
             print(f"❌ Code verification error: {e}")
             return False
@@ -6434,7 +6925,7 @@ After joining, click the button below:"""
             query_id = pre_checkout_query['id']
             url = self.base_url + "answerPreCheckoutQuery"
             data = {"pre_checkout_query_id": query_id, "ok": True}
-            response = requests.post(url, data=data, timeout=8)
+            response = _tg_session.post(url, data=data, timeout=8)
             result = response.json()
             if result.get('ok'):
                 print(f"✅ Pre-checkout approved: {query_id}")
@@ -6621,12 +7112,12 @@ After joining, click the button below:"""
 def register_webhook(token, public_url):
     """Delete old webhook and register the new one with Telegram"""
     try:
-        requests.post(
+        _tg_session.post(
             f"https://api.telegram.org/bot{token}/deleteWebhook",
             timeout=10
         )
         webhook_url = f"{public_url.rstrip('/')}/webhook"
-        r = requests.post(
+        r = _tg_session.post(
             f"https://api.telegram.org/bot{token}/setWebhook",
             data={"url": webhook_url},
             timeout=10
