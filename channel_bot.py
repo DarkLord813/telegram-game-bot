@@ -1519,7 +1519,7 @@ class PremiumGamesSystem:
                 game_info['file_id'],
                 game_info['bot_message_id'],
                 game_info['stars_price'],
-                game_info.get('tokens_price', 10),
+                game_info.get('tokens_price') or game_info['stars_price'],
                 game_info.get('description', ''),
                 game_info.get('is_premium', 1)
             ))
@@ -2440,7 +2440,7 @@ If the issue persists, please contact the admins directly."""
                     self.answer_callback_query(callback_query['id'], "✅ You already own this game!", True)
                     self.send_premium_game_file(user_id, chat_id, game_id)
                     return
-                tokens_price = game.get('tokens_price', 10)
+                tokens_price = game.get('tokens_price') or game['stars_price']
                 if self.referral.deduct_tokens(user_id, tokens_price):
                     cursor = self.conn.cursor()
                     cursor.execute('''
@@ -3984,9 +3984,12 @@ Exclusive games available for purchase with Telegram Stars:
                 ]
             }
         else:
-            user_tokens = self.referral.get_tokens(user_id)
-            tokens_price = game.get('tokens_price', 10)
-            game_text += f"💡 <i>Purchase this game using Telegram Stars or Game Tokens.</i>\n\n💎 Your Tokens: {user_tokens}"
+            user_tokens  = self.referral.get_tokens(user_id)
+            tokens_price = game.get('tokens_price') or game['stars_price']
+            game_text += (
+                f"💡 <i>Purchase with Telegram Stars or Game Tokens.</i>\n\n"
+                f"💎 Your Tokens: <b>{user_tokens}</b>"
+            )
             keyboard = {
                 "inline_keyboard": [
                     [{"text": f"⭐ Buy with Stars ({game['stars_price']} Stars)", "callback_data": f"purchase_premium_{game_id}"}],
@@ -5255,6 +5258,10 @@ Use the broadcast feature to send messages to all users."""
             if 'tokens_price' not in pg_cols:
                 cursor.execute('ALTER TABLE premium_games ADD COLUMN tokens_price INTEGER DEFAULT 10')
                 print("✅ Added tokens_price to premium_games")
+            # Sync tokens_price = stars_price for all games where they differ
+            cursor.execute(
+                'UPDATE premium_games SET tokens_price = stars_price WHERE tokens_price IS NULL OR tokens_price = 0'
+            )
 
             # users migrations (also done by ReferralSystem but guard here too)
             cursor.execute("PRAGMA table_info(users)")
@@ -6668,7 +6675,7 @@ Type your game name now!"""
                         return self.handle_guess_input(user_id, chat_id, text)
                 
                 if text.startswith('/'):
-                    if text == '/start':
+                    if text == '/start' or text.startswith('/start '):
                         return self.handle_verification(message)
                     elif text == '/scan' and self.is_admin(user_id):
                         self.robust_send_message(chat_id, "🔄 Scanning for bot-uploaded games...")
