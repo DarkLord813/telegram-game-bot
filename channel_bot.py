@@ -289,97 +289,123 @@ class ReferralSystem:
             return False
 
     def deduct_tokens(self, user_id, amount):
+        """Atomically deduct tokens. Returns False if user has insufficient balance."""
         try:
-            current = self.get_tokens(user_id)
-            if current < amount:
-                return False
             cursor = self.bot.conn.cursor()
+            # Atomic: only update if current balance >= amount
             cursor.execute(
-                'UPDATE users SET game_tokens = game_tokens - ? WHERE user_id = ?',
-                (amount, user_id)
+                '''UPDATE users SET game_tokens = game_tokens - ?
+                   WHERE user_id = ? AND game_tokens >= ?''',
+                (amount, user_id, amount)
             )
             self.bot.conn.commit()
+            if cursor.rowcount == 0:
+                return False  # insufficient tokens or user not found
             return True
         except Exception:
             return False
 
     def store_pending_referral(self, referrer_id, referred_id):
         """
-        Store the referrer ID when a new user clicks the referral link.
-        The token is NOT awarded yet — only after full verification completes.
-        Safe to call multiple times; only stores once (no overwrite if already set).
+        Store referrer when new user clicks referral link.
+        Uses referred_by=referrer_id as the pending marker (token credited after verification).
+        Safe to call multiple times — only writes once, never overwrites an existing referral.
         """
         try:
             if referrer_id == referred_id:
                 return False
             cursor = self.bot.conn.cursor()
-            # Only set pending_referrer_id if not already referred and not already pending
+            # Only store if user hasn't been referred yet
             cursor.execute(
-                'SELECT referred_by, pending_referrer_id FROM users WHERE user_id = ?',
+                'SELECT referred_by FROM users WHERE user_id = ?',
                 (referred_id,)
             )
             row = cursor.fetchone()
-            if row and (row[0] != 0 or row[1] != 0):
-                return False  # already referred or already has a pending referrer
-            cursor.execute(
-                'UPDATE users SET pending_referrer_id = ? WHERE user_id = ? AND referred_by = 0 AND pending_referrer_id = 0',
-                (referrer_id, referred_id)
-            )
+            if row is None:
+                # User doesn't exist yet — insert with referral
+                cursor.execute(
+                    'INSERT OR IGNORE INTO users (user_id, referred_by) VALUES (?, ?)',
+                    (referred_id, referrer_id)
+                )
+            elif not row[0]:
+                # User exists but no referral stored yet
+                cursor.execute(
+                    'UPDATE users SET referred_by = ? WHERE user_id = ? AND (referred_by IS NULL OR referred_by = 0)',
+                    (referrer_id, referred_id)
+                )
+            else:
+                return False  # already referred
             self.bot.conn.commit()
-            print(f"📌 Pending referral stored: {referrer_id} → {referred_id}")
-            return cursor.rowcount > 0
+            print(f"📌 Referral stored: {referrer_id} → {referred_id}")
+            return True
         except Exception as e:
             print(f"store_pending_referral error: {e}")
             return False
 
     def complete_referral(self, referred_id):
         """
-        Called when referred_id finishes full verification (code + channel).
-        Awards 1 token to the referrer exactly once, then clears pending state.
-        Returns the referrer_id if credited, else None.
+        Called when referred_id finishes full verification.
+        Awards 1 token to the referrer exactly once.
+        Uses referred_by != 0 as the pending marker;
+        sets pending_referrer_id = -1 to mark as already credited.
         """
         try:
             cursor = self.bot.conn.cursor()
-            cursor.execute(
-                'SELECT pending_referrer_id, referred_by FROM users WHERE user_id = ?',
-                (referred_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return None
-            pending_referrer, already_referred = row
-            if pending_referrer == 0 or already_referred != 0:
-                # No pending referrer, or already credited
-                return None
 
-            # Award 1 token to referrer and mark referred user as referred
+            # Check pending_referrer_id column exists (migration safety)
+            try:
+                cursor.execute(
+                    'SELECT referred_by, pending_referrer_id FROM users WHERE user_id = ?',
+                    (referred_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                referrer_id, already_credited = row[0], row[1]
+                # pending_referrer_id = -1 means already credited
+                if already_credited == -1:
+                    return None
+            except Exception:
+                # pending_referrer_id column may not exist on old DBs
+                cursor.execute('SELECT referred_by FROM users WHERE user_id = ?', (referred_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                referrer_id = row[0]
+                already_credited = 0
+
+            if not referrer_id or referrer_id == 0:
+                return None  # no referrer
+
+            # Award 1 token to referrer
             cursor.execute(
                 '''UPDATE users
                    SET game_tokens = game_tokens + 1,
                        total_referrals = total_referrals + 1
                    WHERE user_id = ?''',
-                (pending_referrer,)
+                (referrer_id,)
             )
-            cursor.execute(
-                '''UPDATE users
-                   SET referred_by = ?,
-                       pending_referrer_id = 0
-                   WHERE user_id = ?''',
-                (pending_referrer, referred_id)
-            )
+            # Mark as credited (pending_referrer_id = -1)
+            try:
+                cursor.execute(
+                    'UPDATE users SET pending_referrer_id = -1 WHERE user_id = ?',
+                    (referred_id,)
+                )
+            except Exception:
+                pass
             self.bot.conn.commit()
 
-            # Notify the referrer
-            referrer_tokens = self.get_tokens(pending_referrer)
+            # Notify referrer
+            referrer_tokens = self.get_tokens(referrer_id)
             self.bot.robust_send_message(
-                pending_referrer,
+                referrer_id,
                 f"🎉 <b>Referral Completed!</b>\n\n"
                 f"Your referral just finished verification!\n"
                 f"You earned <b>1 Game Token</b> 💎\n\n"
                 f"💰 Total Tokens: <b>{referrer_tokens}</b>"
             )
-            print(f"✅ Referral credited: {pending_referrer} earned 1 token for referring {referred_id}")
-            return pending_referrer
+            print(f"✅ Referral credited: {referrer_id} earned 1 token for referring {referred_id}")
+            return referrer_id
         except Exception as e:
             print(f"complete_referral error: {e}")
             return None
@@ -1048,28 +1074,27 @@ class TelegramStarsSystem:
         try:
             invoice_payload = f"stars_{user_id}_{int(time.time())}"
             usd_amount = stars_amount * 0.01
-            
+
             prices = [{"label": f"{stars_amount} Stars", "amount": stars_amount}]
-            
+
             invoice_data = {
                 "chat_id": chat_id,
                 "title": "🌟 Bot Stars Donation",
                 "description": description,
                 "payload": invoice_payload,
                 "currency": "XTR",
-                "prices": json.dumps(prices),
-                "start_parameter": "stars_donation",
+                "prices": prices,
                 "need_name": False,
                 "need_phone_number": False,
                 "need_email": False,
                 "need_shipping_address": False,
                 "is_flexible": False
             }
-            
+
             print(f"⭐ Creating Stars invoice for {stars_amount} stars (${usd_amount:.2f})")
-            
+
             url = self.bot.base_url + "sendInvoice"
-            response = _tg_session.post(url, data=invoice_data, timeout=30)
+            response = _tg_session.post(url, json=invoice_data, timeout=30)
             result = response.json()
             
             if result.get('ok'):
@@ -1105,39 +1130,39 @@ class TelegramStarsSystem:
         """Create Stars invoice for premium game purchase"""
         try:
             invoice_payload = f"premium_game_{game_id}_{user_id}_{int(time.time())}"
-            usd_amount = stars_amount * 0.01
-            
+
+            # prices amounts for XTR (Stars) are in whole stars, not cents
             prices = [{"label": f"Premium Game: {game_name}", "amount": stars_amount}]
-            
+
             invoice_data = {
                 "chat_id": chat_id,
                 "title": f"🎮 {game_name}",
-                "description": f"Premium Game Purchase - {stars_amount} Stars",
+                "description": f"Premium Game Purchase — {stars_amount} Stars",
                 "payload": invoice_payload,
                 "currency": "XTR",
-                "prices": json.dumps(prices),
-                "start_parameter": f"premium_game_{game_id}",
+                "prices": prices,
+                # Boolean fields MUST be sent as real JSON booleans (not strings)
                 "need_name": False,
                 "need_phone_number": False,
                 "need_email": False,
                 "need_shipping_address": False,
                 "is_flexible": False
             }
-            
+
             print(f"⭐ Creating premium game invoice: {game_name} for {stars_amount} stars")
-            
+
             url = self.bot.base_url + "sendInvoice"
-            response = _tg_session.post(url, data=invoice_data, timeout=30)
+            # Use json= so all values are properly JSON-encoded (booleans, nested objects)
+            response = _tg_session.post(url, json=invoice_data, timeout=30)
             result = response.json()
-            
+
             if result.get('ok'):
                 cursor = self.bot.conn.cursor()
                 cursor.execute('''
-                    INSERT INTO premium_purchases 
+                    INSERT INTO premium_purchases
                     (user_id, game_id, stars_paid, transaction_id, status)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, game_id, stars_amount, invoice_payload, 'pending'))
-                
+                    VALUES (?, ?, ?, ?, 'pending')
+                ''', (user_id, game_id, stars_amount, invoice_payload))
                 self.bot.conn.commit()
                 print(f"✅ Premium game invoice created: {game_name} for user {user_id}")
                 return True
@@ -1145,7 +1170,7 @@ class TelegramStarsSystem:
                 error_msg = result.get('description', 'Unknown error')
                 print(f"❌ Error creating premium game invoice: {error_msg}")
                 return False
-                
+
         except Exception as e:
             print(f"❌ Error creating premium game invoice: {e}")
             traceback.print_exc()
@@ -3995,22 +4020,27 @@ Exclusive games available for purchase with Telegram Stars:
             self.edit_message(chat_id, message_id, "❌ Failed to create invoice. Please try again.", {"inline_keyboard": [[{"text": "🔙 Back", "callback_data": "premium_games"}]]})
     
     def send_premium_game_file(self, user_id, chat_id, game_id):
-        """Send premium game file to user"""
+        """Send premium game file — only delivers if purchase is confirmed in DB."""
         game = self.premium_games_system.get_premium_game_by_id(game_id)
-        
+
         if not game:
             self.robust_send_message(chat_id, "❌ Game not found.")
             return False
-        
+
+        # Hard gate — never deliver without a confirmed purchase record
         if not self.premium_games_system.has_user_purchased_game(user_id, game_id):
-            self.robust_send_message(chat_id, "❌ You haven't purchased this game yet.")
+            self.robust_send_message(
+                chat_id,
+                "❌ Purchase not found. Please complete payment first.\n\n"
+                "If you paid with Stars, please wait a moment and try again."
+            )
             return False
-        
+
         if game['is_uploaded'] == 1 and game['bot_message_id']:
             success = self.send_game_file(chat_id, game['bot_message_id'], game['file_id'], True)
         else:
             success = self.send_game_file(chat_id, game['message_id'], game['file_id'], False)
-        
+
         if success:
             self.robust_send_message(chat_id, f"✅ Enjoy your premium game: <b>{game['file_name']}</b>!")
             return True
@@ -6522,28 +6552,23 @@ Type your game name now!"""
         try:
             if 'forward_origin' in message:
                 print(f"🔄 Forwarded message received from user {message['from']['id']}")
-                
                 user_id = message['from']['id']
                 chat_id = message['chat']['id']
-                
+
                 if self.is_admin(user_id) and user_id in self.broadcast_sessions:
                     session = self.broadcast_sessions[user_id]
-                    
-                if session['stage'] == 'waiting_message_or_media':
+                    if session['stage'] == 'waiting_message_or_media':
                         if 'photo' in message:
                             photo = message['photo'][-1]
-                            photo_file_id = photo['file_id']
                             caption = message.get('caption', '')
-                            print(f"📸 Processing forwarded broadcast photo with caption: {caption}")
-                            return self.handle_broadcast_photo(user_id, chat_id, photo_file_id, caption)
+                            return self.handle_broadcast_photo(user_id, chat_id, photo['file_id'], caption)
                         elif 'text' in message:
                             text = message['text']
-                            print(f"📝 Processing forwarded broadcast text: {text}")
                             return self.handle_broadcast_message(user_id, chat_id, text)
-                
-                elif 'document' in message and self.is_admin(user_id):
+
+                if 'document' in message and self.is_admin(user_id):
                     return self.handle_document_upload(message)
-                
+
                 return True
             
             if 'text' in message:
@@ -6561,27 +6586,9 @@ Type your game name now!"""
                     except ValueError:
                         pass
 
-                # 6-digit admin code redemption (verified users only, not admins)
-                if (text.strip().isdigit() and len(text.strip()) == 6
-                        and self.is_user_completed(user_id)
-                        and not self.is_admin(user_id)):
-                    ok, msg = self.admin_codes.redeem(text.strip(), user_id)
-                    if ok:
-                        self.referral.add_tokens(user_id, 5)  # reward 5 tokens per code
-                        tokens = self.referral.get_tokens(user_id)
-                        self.robust_send_message(
-                            chat_id,
-                            f"🎉 <b>Code Redeemed!</b>\n\n"
-                            f"✅ {msg}\n"
-                            f"🎁 You received <b>5 Game Tokens</b>!\n"
-                            f"💎 Your balance: <b>{tokens} tokens</b>"
-                        )
-                    else:
-                        self.robust_send_message(chat_id, f"❌ {msg}")
-                    return True
-                
-                if user_id in self.search_sessions and self.search_sessions[user_id].get('mode') == 'remove':
-                    return self.handle_remove_game_search(message)
+                if text.isdigit() and len(text) == 6:
+                    # handle_code_verification tries admin codes first, then verification code
+                    return self.handle_code_verification(message)
                 
                 if user_id in self.upload_sessions:
                     session = self.upload_sessions[user_id]
@@ -6764,10 +6771,6 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                     elif text == '/backup' and self.is_admin(user_id):
                         self.show_backup_menu(user_id, chat_id, message['message_id'])
                         return True
-                
-                if text.isdigit() and len(text) == 6:
-                    # handle_code_verification tries admin codes first, then verification code
-                    return self.handle_code_verification(message)
                 
                 if self.is_user_verified(user_id):
                     return self.handle_game_search(message)
