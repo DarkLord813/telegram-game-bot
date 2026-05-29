@@ -377,10 +377,10 @@ class ReferralSystem:
             if not referrer_id or referrer_id == 0:
                 return None  # no referrer
 
-            # Award 1 token to referrer
+            # Award 10 tokens to referrer and increment their referral count
             cursor.execute(
                 '''UPDATE users
-                   SET game_tokens = game_tokens + 1,
+                   SET game_tokens = game_tokens + 10,
                        total_referrals = total_referrals + 1
                    WHERE user_id = ?''',
                 (referrer_id,)
@@ -401,10 +401,10 @@ class ReferralSystem:
                 referrer_id,
                 f"🎉 <b>Referral Completed!</b>\n\n"
                 f"Your referral just finished verification!\n"
-                f"You earned <b>1 Game Token</b> 💎\n\n"
+                f"You earned <b>10 Game Tokens</b> 💎\n\n"
                 f"💰 Total Tokens: <b>{referrer_tokens}</b>"
             )
-            print(f"✅ Referral credited: {referrer_id} earned 1 token for referring {referred_id}")
+            print(f"✅ Referral credited: {referrer_id} earned 10 tokens for referring {referred_id}")
             return referrer_id
         except Exception as e:
             print(f"complete_referral error: {e}")
@@ -2287,6 +2287,14 @@ If the issue persists, please contact the admins directly."""
             print(f"📨 Callback: {data} from {first_name} ({user_id})")
             
             self.answer_callback_query(callback_query['id'])
+
+            # Clear search/remove-search modes when user presses any button
+            # (keeps them active only while typing in a text message)
+            if data != 'search_games' and data != 'search_remove_game':
+                self.search_mode.pop(user_id, None)
+            if data not in ('search_remove_game', 'cancel_remove') and not data.startswith('confirm_remove_') and not data.startswith('remove_'):
+                if user_id in self.search_sessions and self.search_sessions[user_id].get('mode') == 'remove':
+                    del self.search_sessions[user_id]
             
             # Backup System Callbacks
             if data == "backup_menu":
@@ -2448,8 +2456,22 @@ If the issue persists, please contact the admins directly."""
                         VALUES (?, ?, 0, ?, 'completed')
                     ''', (user_id, game_id, f'tokens_{int(time.time())}'))
                     self.conn.commit()
-                    self.answer_callback_query(callback_query['id'], f"✅ Purchased with {tokens_price} tokens!", True)
+                    # Read updated balance immediately after deduction
+                    new_balance = self.referral.get_tokens(user_id)
+                    self.answer_callback_query(
+                        callback_query['id'],
+                        f"✅ Purchased! {tokens_price} tokens deducted. Balance: {new_balance}",
+                        True
+                    )
                     self.send_premium_game_file(user_id, chat_id, game_id)
+                    # Also send a balance update message
+                    self.robust_send_message(
+                        chat_id,
+                        f"💎 <b>Token Purchase Successful!</b>\n\n"
+                        f"🎮 Game: <b>{game['file_name']}</b>\n"
+                        f"💸 Tokens spent: <b>{tokens_price}</b>\n"
+                        f"💰 Remaining balance: <b>{new_balance} tokens</b>"
+                    )
                 else:
                     user_tokens = self.referral.get_tokens(user_id)
                     self.answer_callback_query(
@@ -2566,7 +2588,7 @@ If the issue persists, please contact the admins directly."""
 🎁 <b>How it works:</b>
 1. Share your referral link below
 2. Friends join using your link
-3. You earn <b>1 Game Token</b> per referral
+3. You earn <b>10 Game Tokens</b> per referral
 4. Use tokens to buy premium games!
 
 🔗 <b>Your Referral Link:</b>
@@ -6664,8 +6686,14 @@ Type your game name now!"""
                         except Exception as e:
                             self.robust_send_message(chat_id, f"❌ Failed to create code: {e}")
                         return True
-                
-                # Search mode: user typed after pressing Search Games
+
+                # Remove-mode search — MUST be checked before search_mode and handle_game_search
+                if (user_id in self.search_sessions
+                        and self.search_sessions[user_id].get('mode') == 'remove'
+                        and not text.startswith('/')):
+                    return self.handle_remove_game_search(message)
+
+                # Search mode: user typed after pressing Search Games button
                 if self.search_mode.get(user_id) and not text.startswith('/'):
                     del self.search_mode[user_id]
                     return self.handle_game_search(message)
@@ -6780,6 +6808,10 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                         return True
                 
                 if self.is_user_verified(user_id):
+                    # Don't intercept text as a game search if admin is in remove-search mode
+                    if (user_id in self.search_sessions
+                            and self.search_sessions[user_id].get('mode') == 'remove'):
+                        return True
                     return self.handle_game_search(message)
             
             if 'photo' in message:
