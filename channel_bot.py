@@ -1815,6 +1815,140 @@ class CrossPlatformBot:
             print(f"❌ Failed to start keep-alive: {e}")
             return False
 
+    def send_db_backup_to_admin(self, user_id, chat_id):
+        """Create a full DB snapshot and send it directly to the admin as a .db file."""
+        if not self.is_admin(user_id):
+            self.robust_send_message(chat_id, "❌ Access denied.")
+            return False
+        try:
+            self.robust_send_message(chat_id, "📦 Creating full database backup…")
+            db_path     = self.get_db_path()
+            backup_path = db_path + f".manual_backup_{int(time.time())}.db"
+
+            # Use SQLite native backup API — safe with WAL mode
+            dest = sqlite3.connect(backup_path)
+            self.conn.backup(dest, pages=0)
+            dest.close()
+
+            # Send as document
+            with open(backup_path, 'rb') as f:
+                url = self.base_url + "sendDocument"
+                import datetime as _dt
+                caption = (
+                    f"📦 <b>Full Database Backup</b>\n\n"
+                    f"📅 {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                    f"Contains:\n"
+                    f"• All users & verification status\n"
+                    f"• All regular games\n"
+                    f"• All premium games\n"
+                    f"• All purchases\n"
+                    f"• Referrals & tokens\n"
+                    f"• Admin codes\n\n"
+                    f"To restore: use Restore from File Backup in admin panel."
+                )
+                response = _tg_session.post(
+                    url,
+                    data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                    files={"document": (os.path.basename(backup_path), f, "application/octet-stream")},
+                    timeout=120
+                )
+                result = response.json()
+
+            try:
+                os.remove(backup_path)
+            except Exception:
+                pass
+
+            if result.get('ok'):
+                print(f"✅ DB backup sent to admin {user_id}")
+                return True
+            else:
+                print(f"❌ Failed to send backup: {result.get('description')}")
+                self.robust_send_message(chat_id, f"❌ Failed to send backup file: {result.get('description')}")
+                return False
+        except Exception as e:
+            print(f"❌ send_db_backup_to_admin error: {e}")
+            self.robust_send_message(chat_id, f"❌ Backup error: {e}")
+            return False
+
+    def restore_db_from_uploaded_file(self, user_id, chat_id, file_id):
+        """Restore the database from a .db file sent by an admin."""
+        if not self.is_admin(user_id):
+            self.robust_send_message(chat_id, "❌ Access denied.")
+            return False
+        try:
+            self.robust_send_message(chat_id, "🔄 Downloading backup file…")
+
+            # Get the file path from Telegram
+            r = _tg_session.post(self.base_url + "getFile",
+                                  data={"file_id": file_id}, timeout=15)
+            file_info = r.json()
+            if not file_info.get('ok'):
+                self.robust_send_message(chat_id, "❌ Failed to get file info from Telegram.")
+                return False
+
+            file_path = file_info['result']['file_path']
+            download_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+
+            r2 = _tg_session.get(download_url, timeout=120)
+            if r2.status_code != 200:
+                self.robust_send_message(chat_id, "❌ Failed to download backup file.")
+                return False
+
+            # Write to a temp path then move
+            db_path  = self.get_db_path()
+            tmp_path = db_path + '.restore_tmp'
+            with open(tmp_path, 'wb') as f:
+                f.write(r2.content)
+
+            # Validate it's a real SQLite DB
+            try:
+                test_conn = sqlite3.connect(tmp_path)
+                test_conn.execute("SELECT COUNT(*) FROM sqlite_master")
+                test_conn.close()
+            except Exception:
+                os.remove(tmp_path)
+                self.robust_send_message(chat_id, "❌ Invalid file — not a valid SQLite database.")
+                return False
+
+            # Close current connection and replace DB file
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+
+            import shutil
+            shutil.move(tmp_path, db_path)
+
+            # Reconnect
+            self.setup_database()
+            self.verify_database_schema()
+            self.update_games_cache()
+
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM channel_games')
+            games = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM users')
+            users = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM premium_games')
+            premium = cursor.fetchone()[0]
+
+            self.robust_send_message(
+                chat_id,
+                f"✅ <b>Database Restored Successfully!</b>\n\n"
+                f"📊 Restored data:\n"
+                f"• 👥 Users: {users}\n"
+                f"• 🎮 Regular games: {games}\n"
+                f"• 💰 Premium games: {premium}\n\n"
+                f"All referrals, tokens, and purchases are restored.",
+                self.create_admin_buttons()
+            )
+            return True
+        except Exception as e:
+            print(f"❌ restore_db_from_uploaded_file error: {e}")
+            self.robust_send_message(chat_id, f"❌ Restore error: {e}")
+            return False
+
     # ==================== GITHUB BACKUP INTEGRATION ====================
 
     def backup_after_game_action(self, action_type, game_name=""):
@@ -1890,12 +2024,16 @@ To enable GitHub backups, set these environment variables:
         
         if backup_info.get('enabled'):
             keyboard["inline_keyboard"].extend([
-                [{"text": "💾 Create Backup Now", "callback_data": "create_backup"}],
-                [{"text": "🔄 Restore from Backup", "callback_data": "restore_backup"}],
+                [{"text": "💾 Create GitHub Backup", "callback_data": "create_backup"}],
+                [{"text": "🔄 Restore from GitHub", "callback_data": "restore_backup"}],
                 [{"text": "📊 Backup Info", "callback_data": "backup_info"}]
             ])
-        
-        keyboard["inline_keyboard"].append([{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}])
+
+        keyboard["inline_keyboard"].extend([
+            [{"text": "📤 Send DB File to Me", "callback_data": "send_db_backup"}],
+            [{"text": "📥 Restore from DB File", "callback_data": "restore_db_file"}],
+            [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+        ])
         
         self.edit_message(chat_id, message_id, status_text, keyboard)
 
@@ -2325,6 +2463,35 @@ If the issue persists, please contact the admins directly."""
                 self.handle_confirm_restore(user_id, chat_id, message_id)
                 return
                 
+            elif data == "send_db_backup":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                threading.Thread(
+                    target=self.send_db_backup_to_admin,
+                    args=(user_id, chat_id),
+                    daemon=True
+                ).start()
+                self.edit_message(chat_id, message_id,
+                    "📦 Preparing full database backup…\nIt will be sent to you shortly.",
+                    {"inline_keyboard": [[{"text": "🔙 Back to Backup", "callback_data": "backup_menu"}]]})
+                return
+
+            elif data == "restore_db_file":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                # Store a flag so the next document from this admin is treated as a restore file
+                self.upload_sessions[user_id] = {'stage': 'waiting_restore_file', 'type': 'restore'}
+                self.edit_message(chat_id, message_id,
+                    "📥 <b>Restore from DB File</b>\n\n"
+                    "Please send the <b>.db backup file</b> now.\n\n"
+                    "⚠️ This will replace all current data with the backup.",
+                    {"inline_keyboard": [
+                        [{"text": "❌ Cancel", "callback_data": "backup_menu"}]
+                    ]})
+                return
+
             elif data == "backup_info":
                 if not self.is_admin(user_id):
                     self.answer_callback_query(callback_query['id'], "❌ Access denied. Admin only.", True)
@@ -6118,18 +6285,11 @@ Always available!
             print("✅ Database setup successful!")
             
         except Exception as e:
-            print(f"❌ Database error: {e}")
-            print("⚠️ Falling back to in-memory database")
-            self.conn = sqlite3.connect(':memory:', check_same_thread=False)
-            # Re-run schema creation on the in-memory connection directly (no recursion)
-            try:
-                cursor = self.conn.cursor()
-                cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, is_verified INTEGER DEFAULT 0, joined_channel INTEGER DEFAULT 0, verification_code TEXT, code_expires DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-                cursor.execute('''CREATE TABLE IF NOT EXISTS channel_games (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER UNIQUE, file_name TEXT, file_type TEXT, file_size INTEGER, upload_date DATETIME, category TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, added_by INTEGER DEFAULT 0, is_uploaded INTEGER DEFAULT 0, is_forwarded INTEGER DEFAULT 0, file_id TEXT, bot_message_id INTEGER)''')
-                self.conn.commit()
-                print("✅ In-memory database schema created")
-            except Exception as inner_e:
-                print(f"❌ In-memory database setup failed: {inner_e}")
+            print(f"❌ Database setup error: {e}")
+            traceback.print_exc()
+            # Do NOT fall back to :memory: — that silently destroys all data.
+            # Re-raise so the caller knows the DB is not usable.
+            raise
     
     def test_bot_connection(self):
         try:
@@ -6842,6 +7002,19 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                         return self.handle_broadcast_video(user_id, chat_id, video_file_id, caption)
             
             if 'document' in message and self.is_admin(message['from']['id']):
+                uid = message['from']['id']
+                cid = message['chat']['id']
+                # Check if admin is waiting to send a restore file
+                if (uid in self.upload_sessions
+                        and self.upload_sessions[uid].get('stage') == 'waiting_restore_file'):
+                    del self.upload_sessions[uid]
+                    file_id = message['document']['file_id']
+                    threading.Thread(
+                        target=self.restore_db_from_uploaded_file,
+                        args=(uid, cid, file_id),
+                        daemon=True
+                    ).start()
+                    return True
                 return self.handle_document_upload(message)
             
             return False
@@ -7280,7 +7453,9 @@ if __name__ == "__main__":
     start_health_check()
     time.sleep(2)
 
-    if BOT_TOKEN:
+    if not BOT_TOKEN:
+        print("❌ No BOT_TOKEN — bot cannot start.")
+    else:
         # Register webhook with Telegram if a public URL is available
         if PUBLIC_URL:
             register_webhook(BOT_TOKEN, PUBLIC_URL)
@@ -7288,45 +7463,35 @@ if __name__ == "__main__":
             print("⚠️ No PUBLIC_URL/CHOREO_URL set — webhook not registered automatically.")
             print("   Set CHOREO_URL to your service's public URL in Choreo environment variables.")
 
-        # Initialise bot and expose it to the Flask webhook route
-        restart_count = 0
-        max_restarts = 10
+        # Create the bot ONCE and never recreate it.
+        # The restart loop was the root cause of games being cleared:
+        # each new CrossPlatformBot() opened a fresh DB connection and if
+        # setup_database() hit any error it fell back to :memory:, wiping all data.
+        try:
+            print("🔄 Initialising bot...")
+            bot_instance = CrossPlatformBot(BOT_TOKEN)
 
-        while restart_count < max_restarts:
-            try:
-                restart_count += 1
-                print(f"🔄 Bot init attempt #{restart_count}")
+            if not bot_instance.initialize_with_persistence():
+                print("❌ Persistence init failed — continuing anyway with existing DB.")
 
-                bot_instance = CrossPlatformBot(BOT_TOKEN)
+            print("✅ Bot is live and listening for webhook updates!")
+            print(f"📡 Webhook endpoint: POST /webhook")
+            print(f"💚 Health endpoint:  GET  /health")
 
-                # Run persistence initialisation (DB restore, cache warm-up, keep-alive)
-                if not bot_instance.initialize_with_persistence():
-                    print("❌ Persistence init failed — retrying...")
-                    time.sleep(10)
-                    continue
+            # Keep the main thread alive forever — updates arrive via Flask webhook.
+            # Never exit: Choreo/Render will handle restarts at the process level if needed.
+            while True:
+                time.sleep(60)
+                print(f"💚 Bot alive — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-                print("✅ Bot is live and listening for webhook updates!")
-                print(f"📡 Webhook endpoint: POST /webhook")
-                print(f"💚 Health endpoint:  GET  /health")
-
-                # Keep the main thread alive — updates arrive via Flask webhook
-                while True:
-                    time.sleep(60)
-                    print(f"💚 Bot alive — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-            except KeyboardInterrupt:
-                print("\n🛑 Bot stopped by user.")
-                break
-            except Exception as e:
-                print(f"💥 Bot crash (#{restart_count}): {e}")
-                if restart_count < max_restarts:
-                    delay = min(10 * restart_count, 120)
-                    print(f"🔄 Restarting in {delay}s...")
-                    time.sleep(delay)
-                else:
-                    print("❌ Max restarts reached.")
-                    break
-    else:
-        print("❌ No BOT_TOKEN — bot cannot start.")
+        except KeyboardInterrupt:
+            print("\n🛑 Bot stopped by user.")
+        except Exception as e:
+            print(f"💥 Bot init error: {e}")
+            traceback.print_exc()
+            # Keep process alive so Flask (health endpoint) still responds
+            print("⚠️ Bot init failed but keeping process alive for health checks.")
+            while True:
+                time.sleep(60)
 
     print("🔴 Bot service ended.")
