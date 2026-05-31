@@ -176,69 +176,38 @@ class EnhancedKeepAliveService:
         self.is_running = False
         self.ping_count = 0
         self.last_successful_ping = time.time()
-        
+
     def start(self):
-        """Start enhanced keep-alive service with better monitoring"""
         self.is_running = True
-        
+
         def ping_loop():
             consecutive_failures = 0
-            max_consecutive_failures = 3
-            
             while self.is_running:
                 try:
                     self.ping_count += 1
                     response = _tg_session.get(self.health_url, timeout=15)
-                    
                     if response.status_code == 200:
                         self.last_successful_ping = time.time()
                         consecutive_failures = 0
-                        print(f"✅ Keep-alive ping #{self.ping_count}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        if self.ping_count % 5 == 0:  # log every 5th ping to reduce noise
+                            print(f"🔋 Keep-alive #{self.ping_count}: OK")
                     else:
                         consecutive_failures += 1
-                        print(f"❌ Keep-alive failed: Status {response.status_code} (Failures: {consecutive_failures})")
-                        
-                except requests.exceptions.ConnectionError:
-                    consecutive_failures += 1
-                    print(f"🔌 Keep-alive connection error (Failures: {consecutive_failures})")
-                except requests.exceptions.Timeout:
-                    consecutive_failures += 1
-                    print(f"⏰ Keep-alive timeout (Failures: {consecutive_failures})")
+                        print(f"⚠️ Keep-alive: HTTP {response.status_code} (failure #{consecutive_failures})")
                 except Exception as e:
                     consecutive_failures += 1
-                    print(f"❌ Keep-alive error: {e} (Failures: {consecutive_failures})")
-                
-                if consecutive_failures >= max_consecutive_failures:
-                    print("🚨 Too many consecutive failures, initiating emergency procedures...")
-                    self.emergency_restart()
-                    consecutive_failures = 0
-                
-                if time.time() - self.last_successful_ping > 600:
-                    print("🚨 No successful pings for 10 minutes, emergency restart...")
-                    self.emergency_restart()
-                    self.last_successful_ping = time.time()
-                
-                if consecutive_failures > 0:
-                    sleep_time = 60
-                else:
-                    sleep_time = 240
-                
+                    print(f"⚠️ Keep-alive ping failed (failure #{consecutive_failures}): {e}")
+
+                # NEVER call os._exit or raise — just log and continue
+                sleep_time = 300 if consecutive_failures == 0 else 60
                 time.sleep(sleep_time)
-        
+
         thread = threading.Thread(target=ping_loop, daemon=True)
         thread.start()
-        print(f"🔄 Enhanced keep-alive service started")
-        print(f"🌐 Health endpoint: {self.health_url}")
-        
-    def emergency_restart(self):
-        """Emergency restart procedure"""
-        print("🔄 Initiating emergency restart...")
-        os._exit(1)
-        
+        print(f"🔋 Keep-alive started → {self.health_url}")
+
     def stop(self):
-        """Stop keep-alive service"""
         self.is_running = False
-        print("🛑 Keep-alive service stopped")
 
 # ==================== REFERRAL SYSTEM WITH GAME TOKENS ====================
 
@@ -1697,63 +1666,98 @@ class CrossPlatformBot:
         print("💾 Persistent data recovery enabled")
     
     def get_db_path(self):
-        """Get fixed database path from DB_NAME env var"""
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DB_NAME)
-        return db_path
+        """
+        Return a writable DB path.
+        Priority:
+          1. DATA_DIR env var (set this to a mounted persistent volume on Choreo)
+          2. /data  if it exists and is writable (common persistent mount)
+          3. /tmp   always writable (survives process lifetime, not reboots)
+        Set DATA_DIR=/data in Choreo environment variables to persist across restarts.
+        """
+        data_dir = os.environ.get('DATA_DIR', '').strip()
+
+        if not data_dir:
+            # Try /data first (common Choreo/Render persistent volume mount point)
+            if os.path.isdir('/data') and os.access('/data', os.W_OK):
+                data_dir = '/data'
+            else:
+                data_dir = '/tmp'
+
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+        except Exception:
+            data_dir = '/tmp'
+
+        return os.path.join(data_dir, DB_NAME)
     
     def initialize_with_persistence(self):
-        """Initialize bot with persistent data recovery including GitHub restore"""
+        """Initialize bot with persistent data recovery."""
         try:
             print("🔄 Initializing bot with persistence...")
-            
-            # Ensure database directory exists
+
             db_path = self.get_db_path()
-            db_dir = os.path.dirname(db_path)
-            if db_dir and not os.path.exists(db_dir):
-                os.makedirs(db_dir, exist_ok=True)
-            
-            # Restore from GitHub only if local DB doesn't exist or is empty
+            print(f"📁 Database path: {db_path}")
+
+            # Restore from GitHub only if local DB is missing or too small
             if self.github_backup.is_enabled:
-                db_path = self.get_db_path()
                 local_exists = os.path.exists(db_path) and os.path.getsize(db_path) > 4096
                 if not local_exists:
-                    print("🔍 No local DB found — attempting GitHub restore …")
+                    print("🔍 No local DB — attempting GitHub restore...")
                     if self.github_backup.restore_database_from_github():
                         print("✅ Database restored from GitHub")
+                        # Reconnect to the restored file
+                        self.setup_database()
+                        self.verify_database_schema()
                     else:
                         print("ℹ️ No GitHub backup found, starting fresh")
                 else:
-                    print("ℹ️ Local DB found — skipping GitHub restore")
-            
-            # Ensure database is properly set up
-            self.setup_database()
-            self.verify_database_schema()
-            
-            # Recover games cache
+                    print(f"ℹ️ Local DB found ({os.path.getsize(db_path)} bytes) — skipping GitHub restore")
+
+            # Warm up cache and sessions
             self.update_games_cache()
-            
-            # Recover uploaded files
             self.recover_uploaded_files()
-            
-            # Recover sessions from database
             self.recover_persistent_sessions()
-            
+
             # Test bot connection
             if not self.test_bot_connection():
-                print("❌ Bot connection failed during initialization")
+                print("❌ Bot connection test failed — check BOT_TOKEN")
                 return False
-                
-            # Start keep-alive service
-            if not self.start_keep_alive():
-                print("❌ Keep-alive service failed to start")
-                return False
-                
-            print("✅ Bot initialization with persistence completed successfully!")
+
+            # Start keep-alive (non-fatal if it fails)
+            try:
+                self.start_keep_alive()
+            except Exception as e:
+                print(f"⚠️ Keep-alive failed to start (non-fatal): {e}")
+
+            # Start periodic auto-backup every 30 minutes
+            self._start_auto_backup()
+
+            print("✅ Bot initialization complete!")
             return True
-            
+
         except Exception as e:
             print(f"❌ Bot initialization failed: {e}")
+            traceback.print_exc()
             return False
+
+    def _start_auto_backup(self):
+        """Push DB to GitHub every 30 minutes if GitHub backup is enabled."""
+        if not self.github_backup.is_enabled:
+            return
+
+        def _backup_loop():
+            while True:
+                time.sleep(1800)  # 30 minutes
+                try:
+                    self.github_backup.backup_database_to_github(
+                        f"Auto backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                    )
+                except Exception as e:
+                    print(f"⚠️ Auto-backup error (non-fatal): {e}")
+
+        t = threading.Thread(target=_backup_loop, daemon=True)
+        t.start()
+        print("⏰ Auto-backup thread started (every 30 min)")
 
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
@@ -1800,20 +1804,21 @@ class CrossPlatformBot:
             return False
 
     def start_keep_alive(self):
-        """Start the enhanced keep-alive service"""
+        """Start the enhanced keep-alive service. Non-fatal if it fails."""
         try:
             if PUBLIC_URL:
                 health_url = f"{PUBLIC_URL.rstrip('/')}/health"
             else:
                 health_url = f"http://localhost:{PORT}/health"
-            
+
             self.keep_alive = EnhancedKeepAliveService(health_url)
             self.keep_alive.start()
-            print(f"🔋 Enhanced keep-alive activated → {health_url}")
+            print(f"🔋 Keep-alive activated → {health_url}")
             return True
         except Exception as e:
-            print(f"❌ Failed to start keep-alive: {e}")
-            return False
+            print(f"⚠️ Keep-alive failed to start (non-fatal): {e}")
+            self.keep_alive = None
+            return True  # Always return True — keep-alive failure must not stop the bot
 
     def send_db_backup_to_admin(self, user_id, chat_id):
         """Create a full DB snapshot and send it directly to the admin as a .db file."""
@@ -7332,7 +7337,7 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
     # ==================== WEBHOOK DISPATCH ====================
 
     def process_update(self, update):
-        """Called by the /webhook Flask route for each incoming Telegram update"""
+        """Called by the /webhook Flask route. All exceptions caught — nothing can crash Flask."""
         try:
             if 'message' in update:
                 msg = update['message']
@@ -7346,6 +7351,8 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                 self.handle_pre_checkout_query(update['pre_checkout_query'])
         except Exception as e:
             print(f"❌ process_update error: {e}")
+            traceback.print_exc()
+            # Never re-raise — Flask must always return 200 to Telegram
 
     # ==================== ENHANCED RUN METHOD WITH PERSISTENCE ====================
 
@@ -7384,44 +7391,28 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                         except Exception as e:
                             print(f"❌ Update processing error: {e}")
                             continue
-                # Empty result is normal (no user activity) — do NOT count as failure
-                
+                # Empty result is normal (no user activity)
+
                 current_time = time.time()
-                time_since_last_update = current_time - last_successful_update
-                
-                if time_since_last_update > 300:
-                    print(f"🚨 No updates for {time_since_last_update:.0f} seconds, testing connection...")
+                time_since_last = current_time - last_successful_update
+
+                if time_since_last > 300:
                     if not self.test_bot_connection():
-                        print("❌ Bot connection lost, triggering restart...")
-                        raise ConnectionError("Bot connection lost")
-                
-                if update_failures >= max_update_failures:
-                    print("🚨 Too many update failures, triggering restart...")
-                    raise ConnectionError("Too many update failures")
-                
+                        print("⚠️ Bot connection test failed — will retry")
+                        time.sleep(30)
+
                 time.sleep(0.5)
-                
+
             except KeyboardInterrupt:
                 print("\n🛑 Bot stopped by user")
                 if self.keep_alive:
                     self.keep_alive.stop()
                 break
-                
-            except ConnectionError as e:
-                print(f"🔌 Connection issue: {e}")
-                self.handle_error(e, "connection_lost")
-                raise
-                
+
             except Exception as e:
-                error_msg = str(e)
-                print(f"❌ Main loop error: {error_msg}")
-                
-                if any(keyword in error_msg.lower() for keyword in ['token', 'connection', 'network', 'timeout']):
-                    self.handle_error(e, "critical_error")
-                    raise
-                else:
-                    self.handle_error(e, "non_critical_error")
-                    time.sleep(5)
+                # Log but never raise — the loop must continue
+                print(f"❌ run() loop error (non-fatal): {e}")
+                time.sleep(5)
 
 # ==================== CHOREO / WEBHOOK ENTRY POINT ====================
 
