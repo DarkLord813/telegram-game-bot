@@ -75,6 +75,8 @@ print("GitHub Database Backup & Restore System")
 print("24/7 Operation with Persistent Data Recovery")
 print("=" * 50)
 
+_start_time = time.time()  # used by health endpoint
+
 # ==================== STARTUP INFO ====================
 print("🔍 Startup: Python", sys.version.split()[0], "| Dir:", os.getcwd())
 print(f"🔍 BOT_TOKEN: {'SET ✅' if BOT_TOKEN else 'MISSING ❌'}")
@@ -90,20 +92,19 @@ bot_instance = None  # Set after bot is created
 
 @app.route('/health')
 def health_check():
-    """Health endpoint for Choreo / uptime monitoring"""
+    """Health endpoint — must always return 200 quickly. Never makes external API calls."""
     try:
-        bot_status = 'unknown'
-        if bot_instance and hasattr(bot_instance, 'test_bot_connection'):
-            bot_status = 'healthy' if bot_instance.test_bot_connection() else 'unhealthy'
+        uptime = time.time() - _start_time if '_start_time' in globals() else 0
         return jsonify({
             'status': 'healthy',
             'timestamp': time.time(),
             'service': BOT_SERVICE_NAME,
             'mode': 'webhook',
-            'bot_status': bot_status
+            'bot_ready': bot_instance is not None,
+            'uptime_seconds': int(uptime)
         }), 200
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'status': 'healthy', 'error': str(e)}), 200  # always 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -121,23 +122,19 @@ def webhook():
 
 @app.route('/redeploy', methods=['POST'])
 def redeploy_endpoint():
-    """Redeploy endpoint for admins"""
+    """Redeploy endpoint — logs the request but does NOT exit the process."""
     try:
         auth_token = flask_request.headers.get('Authorization', '')
-        payload = flask_request.get_json() or {}
-        user_id = str(payload.get('user_id', ''))
+        payload    = flask_request.get_json() or {}
+        user_id    = str(payload.get('user_id', ''))
         is_authorized = (
             auth_token == REDEPLOY_TOKEN
             or user_id in [str(i) for i in ADMIN_IDS]
         )
         if not is_authorized:
             return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
-        print(f"🔄 Redeploy triggered by user {user_id}")
-        def delayed_restart():
-            time.sleep(5)
-            os._exit(0)
-        threading.Thread(target=delayed_restart, daemon=True).start()
-        return jsonify({'status': 'success', 'message': 'Redeploy initiated', 'timestamp': datetime.now().isoformat()}), 200
+        print(f"ℹ️ Redeploy requested by user {user_id} — process kept alive (DB persistence)")
+        return jsonify({'status': 'success', 'message': 'Noted. Use Choreo dashboard to redeploy.', 'timestamp': datetime.now().isoformat()}), 200
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -664,8 +661,17 @@ class GitHubBackupSystem:
             with open(backup_file, 'rb') as f:
                 db_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-            # Always fetch the current SHA so we can update (not create-duplicate)
             file_sha = self.get_file_sha()
+
+            # Build a rich commit message with stats
+            try:
+                stats = self.bot._get_full_db_stats()
+                commit_message += (
+                    f" | users:{stats['users']} games:{stats['channel_games']}"
+                    f" purchases:{stats['purchases_completed']} tokens:{stats['total_tokens']}"
+                )
+            except Exception:
+                pass
 
             payload = {
                 'message': commit_message,
@@ -683,8 +689,7 @@ class GitHubBackupSystem:
                 pass
 
             if r.status_code in (200, 201):
-                commit_url = r.json().get('commit', {}).get('html_url', 'n/a')
-                print(f"✅ DB backed up to GitHub → {commit_url}")
+                print(f"✅ DB backed up to GitHub → {r.json().get('commit', {}).get('html_url', 'ok')}")
                 return True
             else:
                 print(f"❌ GitHub backup failed {r.status_code}: {r.text[:300]}")
@@ -1667,21 +1672,27 @@ class CrossPlatformBot:
     
     def get_db_path(self):
         """
-        Return a writable DB path.
+        Return a stable writable DB path.
+
         Priority:
-          1. DATA_DIR env var (set this to a mounted persistent volume on Choreo)
-          2. /data  if it exists and is writable (common persistent mount)
-          3. /tmp   always writable (survives process lifetime, not reboots)
-        Set DATA_DIR=/data in Choreo environment variables to persist across restarts.
+          1. DATA_DIR env var  — set this to a Choreo persistent volume mount (e.g. /data)
+          2. /data             — auto-detected if writable (common Choreo/Render mount)
+          3. /tmp              — always writable; survives the process but NOT container restarts.
+                                 If using /tmp, set GITHUB_TOKEN for automatic backup/restore.
+
+        ⚠️  /tmp is wiped on every Choreo container restart.
+             Mount a persistent volume at /data and set DATA_DIR=/data to keep data forever.
         """
         data_dir = os.environ.get('DATA_DIR', '').strip()
 
         if not data_dir:
-            # Try /data first (common Choreo/Render persistent volume mount point)
             if os.path.isdir('/data') and os.access('/data', os.W_OK):
                 data_dir = '/data'
+                print("📁 Using /data for database (persistent volume detected)")
             else:
                 data_dir = '/tmp'
+                print("⚠️  Using /tmp for database — data will be lost on container restart!")
+                print("⚠️  Set DATA_DIR=/data and mount a persistent volume to prevent this.")
 
         try:
             os.makedirs(data_dir, exist_ok=True)
@@ -1691,45 +1702,47 @@ class CrossPlatformBot:
         return os.path.join(data_dir, DB_NAME)
     
     def initialize_with_persistence(self):
-        """Initialize bot with persistent data recovery."""
+        """Initialize bot. Always restores from GitHub if DB is missing or empty."""
         try:
             print("🔄 Initializing bot with persistence...")
 
             db_path = self.get_db_path()
             print(f"📁 Database path: {db_path}")
 
-            # Restore from GitHub only if local DB is missing or too small
             if self.github_backup.is_enabled:
-                local_exists = os.path.exists(db_path) and os.path.getsize(db_path) > 4096
-                if not local_exists:
-                    print("🔍 No local DB — attempting GitHub restore...")
+                db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+                if db_size < 4096:
+                    print(f"🔍 DB missing or empty ({db_size} bytes) — restoring from GitHub...")
                     if self.github_backup.restore_database_from_github():
-                        print("✅ Database restored from GitHub")
+                        print("✅ Database restored from GitHub — reconnecting...")
                         # Reconnect to the restored file
+                        try:
+                            self.conn.close()
+                        except Exception:
+                            pass
                         self.setup_database()
                         self.verify_database_schema()
                     else:
-                        print("ℹ️ No GitHub backup found, starting fresh")
+                        print("ℹ️ No GitHub backup available — starting with empty DB")
                 else:
-                    print(f"ℹ️ Local DB found ({os.path.getsize(db_path)} bytes) — skipping GitHub restore")
+                    print(f"✅ Local DB found ({db_size} bytes) — skipping GitHub restore")
+            else:
+                print("ℹ️ GitHub backup not configured — using local DB only")
+                print("   Set GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME to enable auto-restore")
 
-            # Warm up cache and sessions
             self.update_games_cache()
             self.recover_uploaded_files()
             self.recover_persistent_sessions()
 
-            # Test bot connection
             if not self.test_bot_connection():
                 print("❌ Bot connection test failed — check BOT_TOKEN")
                 return False
 
-            # Start keep-alive (non-fatal if it fails)
             try:
                 self.start_keep_alive()
             except Exception as e:
                 print(f"⚠️ Keep-alive failed to start (non-fatal): {e}")
 
-            # Start periodic auto-backup every 30 minutes
             self._start_auto_backup()
 
             print("✅ Bot initialization complete!")
@@ -1741,23 +1754,25 @@ class CrossPlatformBot:
             return False
 
     def _start_auto_backup(self):
-        """Push DB to GitHub every 30 minutes if GitHub backup is enabled."""
+        """Push DB to GitHub every 10 minutes if GitHub backup is enabled."""
         if not self.github_backup.is_enabled:
+            print("ℹ️ Auto-backup disabled — configure GitHub env vars to enable")
             return
 
         def _backup_loop():
+            time.sleep(60)  # wait 1 min before first backup
             while True:
-                time.sleep(1800)  # 30 minutes
                 try:
                     self.github_backup.backup_database_to_github(
                         f"Auto backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                     )
                 except Exception as e:
                     print(f"⚠️ Auto-backup error (non-fatal): {e}")
+                time.sleep(600)  # every 10 minutes
 
         t = threading.Thread(target=_backup_loop, daemon=True)
         t.start()
-        print("⏰ Auto-backup thread started (every 30 min)")
+        print("⏰ Auto-backup thread started (every 10 min → GitHub)")
 
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
@@ -1820,41 +1835,85 @@ class CrossPlatformBot:
             self.keep_alive = None
             return True  # Always return True — keep-alive failure must not stop the bot
 
+    def _get_full_db_stats(self):
+        """Return counts for every table — used in backup captions and restore summaries."""
+        queries = {
+            'users':                   'SELECT COUNT(*) FROM users',
+            'verified_users':          'SELECT COUNT(*) FROM users WHERE is_verified=1 AND joined_channel=1',
+            'total_referrals':         'SELECT COALESCE(SUM(total_referrals),0) FROM users',
+            'total_tokens':            'SELECT COALESCE(SUM(game_tokens),0) FROM users',
+            'referred_users':          'SELECT COUNT(*) FROM users WHERE referred_by != 0',
+            'channel_games':           'SELECT COUNT(*) FROM channel_games',
+            'premium_games':           'SELECT COUNT(*) FROM premium_games',
+            'purchases_completed':     'SELECT COUNT(*) FROM premium_purchases WHERE status="completed"',
+            'purchases_pending':       'SELECT COUNT(*) FROM premium_purchases WHERE status="pending"',
+            'stars_transactions':      'SELECT COUNT(*) FROM stars_transactions',
+            'stars_completed':         'SELECT COUNT(*) FROM stars_transactions WHERE payment_status="completed"',
+            'stars_earned':            'SELECT COALESCE(SUM(stars_amount),0) FROM stars_transactions WHERE payment_status="completed"',
+            'game_requests_total':     'SELECT COUNT(*) FROM game_requests',
+            'game_requests_pending':   'SELECT COUNT(*) FROM game_requests WHERE status="pending"',
+            'game_requests_completed': 'SELECT COUNT(*) FROM game_requests WHERE status="completed"',
+            'game_request_replies':    'SELECT COUNT(*) FROM game_request_replies',
+            'admin_codes':             'SELECT COUNT(*) FROM admin_codes',
+            'admin_codes_active':      'SELECT COUNT(*) FROM admin_codes WHERE is_active=1',
+            'admin_code_uses':         'SELECT COUNT(*) FROM admin_code_uses',
+        }
+        stats = {}
+        cursor = self.conn.cursor()
+        for key, sql in queries.items():
+            try:
+                cursor.execute(sql)
+                stats[key] = cursor.fetchone()[0] or 0
+            except Exception:
+                stats[key] = 0
+        return stats
+
     def send_db_backup_to_admin(self, user_id, chat_id):
-        """Create a full DB snapshot and send it directly to the admin as a .db file."""
+        """Create a full DB snapshot and send to admin as .db file with complete stats."""
         if not self.is_admin(user_id):
             self.robust_send_message(chat_id, "❌ Access denied.")
             return False
         try:
             self.robust_send_message(chat_id, "📦 Creating full database backup…")
             db_path     = self.get_db_path()
-            backup_path = db_path + f".manual_backup_{int(time.time())}.db"
+            backup_path = db_path + f".backup_{int(time.time())}.db"
 
-            # Use SQLite native backup API — safe with WAL mode
             dest = sqlite3.connect(backup_path)
             self.conn.backup(dest, pages=0)
             dest.close()
 
-            # Send as document
+            stats    = self._get_full_db_stats()
+            size_kb  = round(os.path.getsize(backup_path) / 1024, 1)
+            caption  = (
+                f"📦 <b>Full Database Backup</b>\n"
+                f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"💾 Size: {size_kb} KB\n\n"
+                f"<b>👥 Users</b>\n"
+                f"Total: {stats['users']} | Verified: {stats['verified_users']}\n"
+                f"Referred: {stats['referred_users']} | Total referrals made: {stats['total_referrals']}\n"
+                f"💎 Tokens in circulation: {stats['total_tokens']}\n\n"
+                f"<b>🎮 Games</b>\n"
+                f"Regular: {stats['channel_games']} | Premium: {stats['premium_games']}\n\n"
+                f"<b>🛒 Purchases</b>\n"
+                f"Completed: {stats['purchases_completed']} | Pending: {stats['purchases_pending']}\n\n"
+                f"<b>⭐ Stars</b>\n"
+                f"Transactions: {stats['stars_transactions']} ({stats['stars_completed']} completed)\n"
+                f"Total Stars earned: {stats['stars_earned']}\n\n"
+                f"<b>📝 Game Requests</b>\n"
+                f"Total: {stats['game_requests_total']} | Pending: {stats['game_requests_pending']}\n"
+                f"Completed: {stats['game_requests_completed']} | Replies: {stats['game_request_replies']}\n\n"
+                f"<b>🔑 Admin Codes</b>\n"
+                f"Total: {stats['admin_codes']} ({stats['admin_codes_active']} active)\n"
+                f"Redemptions: {stats['admin_code_uses']}\n\n"
+                f"<i>Send this file back to restore all data.</i>"
+            )
+
             with open(backup_path, 'rb') as f:
-                url = self.base_url + "sendDocument"
-                import datetime as _dt
-                caption = (
-                    f"📦 <b>Full Database Backup</b>\n\n"
-                    f"📅 {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                    f"Contains:\n"
-                    f"• All users & verification status\n"
-                    f"• All regular games\n"
-                    f"• All premium games\n"
-                    f"• All purchases\n"
-                    f"• Referrals & tokens\n"
-                    f"• Admin codes\n\n"
-                    f"To restore: use Restore from File Backup in admin panel."
-                )
+                fname = f"gamerdroid_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
                 response = _tg_session.post(
-                    url,
+                    self.base_url + "sendDocument",
                     data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
-                    files={"document": (os.path.basename(backup_path), f, "application/octet-stream")},
+                    files={"document": (fname, f, "application/octet-stream")},
                     timeout=120
                 )
                 result = response.json()
@@ -1865,26 +1924,33 @@ class CrossPlatformBot:
                 pass
 
             if result.get('ok'):
-                print(f"✅ DB backup sent to admin {user_id}")
+                print(f"✅ DB backup sent to admin {user_id} ({size_kb} KB)")
+                # Also push to GitHub immediately
+                if self.github_backup.is_enabled:
+                    threading.Thread(
+                        target=self.github_backup.backup_database_to_github,
+                        args=(f"Manual backup by admin {user_id}",),
+                        daemon=True
+                    ).start()
                 return True
             else:
-                print(f"❌ Failed to send backup: {result.get('description')}")
-                self.robust_send_message(chat_id, f"❌ Failed to send backup file: {result.get('description')}")
+                err = result.get('description', 'Unknown error')
+                self.robust_send_message(chat_id, f"❌ Failed to send file: {err}")
                 return False
         except Exception as e:
             print(f"❌ send_db_backup_to_admin error: {e}")
+            traceback.print_exc()
             self.robust_send_message(chat_id, f"❌ Backup error: {e}")
             return False
 
     def restore_db_from_uploaded_file(self, user_id, chat_id, file_id):
-        """Restore the database from a .db file sent by an admin."""
+        """Restore database from uploaded .db file. Shows full stats after restore."""
         if not self.is_admin(user_id):
             self.robust_send_message(chat_id, "❌ Access denied.")
             return False
         try:
             self.robust_send_message(chat_id, "🔄 Downloading backup file…")
 
-            # Get the file path from Telegram
             r = _tg_session.post(self.base_url + "getFile",
                                   data={"file_id": file_id}, timeout=15)
             file_info = r.json()
@@ -1892,7 +1958,7 @@ class CrossPlatformBot:
                 self.robust_send_message(chat_id, "❌ Failed to get file info from Telegram.")
                 return False
 
-            file_path = file_info['result']['file_path']
+            file_path    = file_info['result']['file_path']
             download_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
 
             r2 = _tg_session.get(download_url, timeout=120)
@@ -1900,7 +1966,6 @@ class CrossPlatformBot:
                 self.robust_send_message(chat_id, "❌ Failed to download backup file.")
                 return False
 
-            # Write to a temp path then move
             db_path  = self.get_db_path()
             tmp_path = db_path + '.restore_tmp'
             with open(tmp_path, 'wb') as f:
@@ -1909,14 +1974,22 @@ class CrossPlatformBot:
             # Validate it's a real SQLite DB
             try:
                 test_conn = sqlite3.connect(tmp_path)
-                test_conn.execute("SELECT COUNT(*) FROM sqlite_master")
+                test_cur  = test_conn.cursor()
+                test_cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                found = {row[0] for row in test_cur.fetchall()}
                 test_conn.close()
-            except Exception:
-                os.remove(tmp_path)
-                self.robust_send_message(chat_id, "❌ Invalid file — not a valid SQLite database.")
+                if 'users' not in found or 'channel_games' not in found:
+                    os.remove(tmp_path)
+                    self.robust_send_message(chat_id, "❌ Not a valid bot database file.")
+                    return False
+            except Exception as e:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+                self.robust_send_message(chat_id, f"❌ Invalid SQLite file: {e}")
                 return False
 
-            # Close current connection and replace DB file
             try:
                 self.conn.close()
             except Exception:
@@ -1924,33 +1997,36 @@ class CrossPlatformBot:
 
             import shutil
             shutil.move(tmp_path, db_path)
+            self.robust_send_message(chat_id, "🔄 Running migrations…")
 
-            # Reconnect
             self.setup_database()
             self.verify_database_schema()
             self.update_games_cache()
 
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM channel_games')
-            games = cursor.fetchone()[0]
-            cursor.execute('SELECT COUNT(*) FROM users')
-            users = cursor.fetchone()[0]
-            cursor.execute('SELECT COUNT(*) FROM premium_games')
-            premium = cursor.fetchone()[0]
-
+            stats = self._get_full_db_stats()
             self.robust_send_message(
                 chat_id,
-                f"✅ <b>Database Restored Successfully!</b>\n\n"
-                f"📊 Restored data:\n"
-                f"• 👥 Users: {users}\n"
-                f"• 🎮 Regular games: {games}\n"
-                f"• 💰 Premium games: {premium}\n\n"
-                f"All referrals, tokens, and purchases are restored.",
+                f"✅ <b>Database Restored!</b>\n\n"
+                f"<b>👥 Users</b>\n"
+                f"Total: {stats['users']} | Verified: {stats['verified_users']}\n"
+                f"Referred: {stats['referred_users']} | Referrals made: {stats['total_referrals']}\n"
+                f"💎 Tokens: {stats['total_tokens']}\n\n"
+                f"<b>🎮 Games</b>\n"
+                f"Regular: {stats['channel_games']} | Premium: {stats['premium_games']}\n\n"
+                f"<b>🛒 Purchases</b>\n"
+                f"Completed: {stats['purchases_completed']} | Pending: {stats['purchases_pending']}\n\n"
+                f"<b>⭐ Stars</b>\n"
+                f"Transactions: {stats['stars_transactions']} | Earned: {stats['stars_earned']}\n\n"
+                f"<b>📝 Requests</b>\n"
+                f"Total: {stats['game_requests_total']} | Pending: {stats['game_requests_pending']}\n\n"
+                f"<b>🔑 Admin Codes</b>\n"
+                f"Total: {stats['admin_codes']} | Redemptions: {stats['admin_code_uses']}",
                 self.create_admin_buttons()
             )
             return True
         except Exception as e:
             print(f"❌ restore_db_from_uploaded_file error: {e}")
+            traceback.print_exc()
             self.robust_send_message(chat_id, f"❌ Restore error: {e}")
             return False
 
