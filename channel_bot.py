@@ -371,6 +371,8 @@ class ReferralSystem:
                 f"💰 Total Tokens: <b>{referrer_tokens}</b>"
             )
             print(f"✅ Referral credited: {referrer_id} earned 10 tokens for referring {referred_id}")
+            # Backup — token balance and referral count changed
+            self.bot.backup_after_game_action("Referral Completed", f"referrer={referrer_id} referred={referred_id}")
             return referrer_id
         except Exception as e:
             print(f"complete_referral error: {e}")
@@ -491,6 +493,8 @@ class AdminCodeSystem:
             (code, admin_id, expires_at.isoformat(), max_uses, token_reward, description)
         )
         self.bot.conn.commit()
+        # Trigger immediate backup — new code must be preserved
+        self.bot.backup_after_game_action("Admin Code Created", f"code={code}")
         return code
 
     def redeem(self, code_str, user_id):
@@ -536,7 +540,8 @@ class AdminCodeSystem:
 
         # Award tokens
         self.bot.referral.add_tokens(user_id, token_reward)
-
+        # Backup after redemption — token balance changed
+        self.bot.backup_after_game_action("Code Redeemed", f"code={code_str} user={user_id}")
         return True, f"You received <b>{token_reward} Game Token(s)</b>! 🎉", token_reward
 
     def list_codes(self, admin_id):
@@ -647,10 +652,25 @@ class GitHubBackupSystem:
             print(f"❌ DB snapshot error: {e}")
             return None
 
+    def _is_db_empty(self):
+        """Return True if the DB has no meaningful data (never back this up)."""
+        try:
+            c = self.bot.conn.cursor()
+            # A real database has at least 1 user OR 1 game
+            c.execute('SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM channel_games) + (SELECT COUNT(*) FROM premium_games)')
+            total = c.fetchone()[0]
+            return total == 0
+        except Exception:
+            return True  # treat unknown state as empty — safer not to push
+
     def backup_database_to_github(self, commit_message="Auto backup: Database update"):
-        """Push the current DB to GitHub (create or update the file)."""
+        """Push the current DB to GitHub. Silently skips if DB is empty."""
         if not self.is_enabled:
-            print("⚠️ GitHub backup disabled – skipping")
+            return False
+
+        # Never push an empty database — if DB is empty, restore instead
+        if self._is_db_empty():
+            print("⚠️ GitHub backup skipped — database is empty. Run restore instead.")
             return False
         try:
             print("🔄 Starting GitHub backup …")
@@ -1754,25 +1774,40 @@ class CrossPlatformBot:
             return False
 
     def _start_auto_backup(self):
-        """Push DB to GitHub every 10 minutes if GitHub backup is enabled."""
+        """
+        Push DB to GitHub every 5 minutes.
+        If DB is empty at backup time, attempt restore from GitHub instead.
+        """
         if not self.github_backup.is_enabled:
-            print("ℹ️ Auto-backup disabled — configure GitHub env vars to enable")
+            print("ℹ️ Auto-backup disabled — set GITHUB_TOKEN + GITHUB_REPO_OWNER + GITHUB_REPO_NAME")
             return
 
         def _backup_loop():
-            time.sleep(60)  # wait 1 min before first backup
+            time.sleep(30)  # brief initial delay to let startup finish
             while True:
                 try:
-                    self.github_backup.backup_database_to_github(
-                        f"Auto backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                    )
+                    if self.github_backup._is_db_empty():
+                        print("⚠️ Auto-backup: DB is empty — attempting GitHub restore instead of backup")
+                        if self.github_backup.restore_database_from_github():
+                            try:
+                                self.conn.close()
+                            except Exception:
+                                pass
+                            self.setup_database()
+                            self.verify_database_schema()
+                            self.update_games_cache()
+                            print("✅ Auto-restored from GitHub successfully")
+                    else:
+                        self.github_backup.backup_database_to_github(
+                            f"Auto backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                        )
                 except Exception as e:
-                    print(f"⚠️ Auto-backup error (non-fatal): {e}")
-                time.sleep(600)  # every 10 minutes
+                    print(f"⚠️ Auto-backup/restore error (non-fatal): {e}")
+                time.sleep(300)  # every 5 minutes
 
         t = threading.Thread(target=_backup_loop, daemon=True)
         t.start()
-        print("⏰ Auto-backup thread started (every 10 min → GitHub)")
+        print("⏰ Auto-backup started — every 5 min → GitHub (skips empty DB, restores if empty)")
 
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
@@ -2712,7 +2747,6 @@ If the issue persists, please contact the admins directly."""
                         True
                     )
                     self.send_premium_game_file(user_id, chat_id, game_id)
-                    # Also send a balance update message
                     self.robust_send_message(
                         chat_id,
                         f"💎 <b>Token Purchase Successful!</b>\n\n"
@@ -2720,6 +2754,8 @@ If the issue persists, please contact the admins directly."""
                         f"💸 Tokens spent: <b>{tokens_price}</b>\n"
                         f"💰 Remaining balance: <b>{new_balance} tokens</b>"
                     )
+                    # Backup — purchase and token balance changed
+                    self.backup_after_game_action("Token Purchase", game['file_name'])
                 else:
                     user_tokens = self.referral.get_tokens(user_id)
                     self.answer_callback_query(
@@ -7378,6 +7414,8 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                             f"⭐ Stars paid: <b>{stars}</b>\n"
                             f"🎮 Your game is being sent now...")
                         self.send_premium_game_file(user_id, chat_id, game_id)
+                        # Backup — purchase record and stars balance changed
+                        self.backup_after_game_action("Stars Purchase", f"game_id={game_id} stars={stars}")
                         return
 
             # Generic stars donation
@@ -7405,6 +7443,8 @@ This service pings the bot every 4 minutes to prevent sleep on free hosting."""
                 f"💫 Stars donated: <b>{stars}</b>\n"
                 f"💰 Value: <b>${stars * 0.01:.2f}</b>\n\n"
                 f"Your support keeps this bot running! 🙏")
+            # Backup — stars balance changed
+            self.backup_after_game_action("Stars Donation", f"stars={stars} user={user_id}")
 
         except Exception as e:
             print(f"❌ handle_successful_payment error: {e}")
