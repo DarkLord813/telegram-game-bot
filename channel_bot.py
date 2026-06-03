@@ -1205,6 +1205,65 @@ class TelegramStarsSystem:
             print(f"❌ Error getting recent stars transactions: {e}")
             return []
 
+    def record_withdrawal(self, admin_id, stars_amount, note=''):
+        """
+        Record a manual withdrawal in the DB and deduct from available balance.
+        Call this AFTER you've completed the withdrawal in the Telegram app.
+        """
+        try:
+            cursor = self.bot.conn.cursor()
+            # Check available balance
+            bal = self.get_balance()
+            if stars_amount > bal['available_stars']:
+                return False, f"❌ Cannot record withdrawal of {stars_amount} Stars — only {bal['available_stars']} available."
+
+            cursor.execute(
+                'INSERT INTO stars_withdrawals (admin_id, stars_amount, note) VALUES (?, ?, ?)',
+                (admin_id, stars_amount, note)
+            )
+            cursor.execute(
+                '''UPDATE stars_balance
+                   SET available_stars = available_stars - ?,
+                       available_usd   = available_usd   - ?,
+                       last_updated    = CURRENT_TIMESTAMP
+                   WHERE id = 1''',
+                (stars_amount, round(stars_amount * 0.013, 4))
+            )
+            self.bot.conn.commit()
+            return True, f"✅ Withdrawal of {stars_amount} Stars recorded."
+        except Exception as e:
+            return False, f"❌ Error recording withdrawal: {e}"
+
+    def get_withdrawal_history(self, limit=10):
+        """Return recent withdrawal records."""
+        try:
+            cursor = self.bot.conn.cursor()
+            cursor.execute(
+                '''SELECT admin_id, stars_amount, note, withdrawn_at
+                   FROM stars_withdrawals
+                   ORDER BY withdrawn_at DESC LIMIT ?''',
+                (limit,)
+            )
+            return cursor.fetchall()
+        except Exception:
+            return []
+
+    def refund_star_payment(self, telegram_payment_charge_id):
+        """
+        Refund a Stars payment back to the user using Telegram's refundStarPayment API.
+        telegram_payment_charge_id comes from the successful_payment object.
+        """
+        try:
+            r = _tg_session.post(
+                self.bot.base_url + "refundStarPayment",
+                json={"telegram_payment_charge_id": telegram_payment_charge_id},
+                timeout=15
+            )
+            result = r.json()
+            return result.get('ok', False), result.get('description', '')
+        except Exception as e:
+            return False, str(e)
+
     def complete_premium_purchase(self, transaction_id):
         """Mark premium purchase as completed"""
         try:
@@ -1722,33 +1781,43 @@ class CrossPlatformBot:
         return os.path.join(data_dir, DB_NAME)
     
     def initialize_with_persistence(self):
-        """Initialize bot. Always restores from GitHub if DB is missing or empty."""
+        """
+        GitHub is the source of truth.
+        On every startup: pull from GitHub unconditionally (if configured).
+        This guarantees no data loss even when /tmp is wiped between restarts.
+        """
         try:
-            print("🔄 Initializing bot with persistence...")
-
+            print("🔄 Initializing bot...")
             db_path = self.get_db_path()
-            print(f"📁 Database path: {db_path}")
+            print(f"📁 Local DB path: {db_path}")
 
             if self.github_backup.is_enabled:
-                db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
-                if db_size < 4096:
-                    print(f"🔍 DB missing or empty ({db_size} bytes) — restoring from GitHub...")
-                    if self.github_backup.restore_database_from_github():
-                        print("✅ Database restored from GitHub — reconnecting...")
-                        # Reconnect to the restored file
-                        try:
-                            self.conn.close()
-                        except Exception:
-                            pass
-                        self.setup_database()
-                        self.verify_database_schema()
-                    else:
-                        print("ℹ️ No GitHub backup available — starting with empty DB")
+                print("🔄 Fetching latest database from GitHub (source of truth)...")
+                restored = self.github_backup.restore_database_from_github()
+                if restored:
+                    print("✅ Database loaded from GitHub — reconnecting...")
+                    try:
+                        self.conn.close()
+                    except Exception:
+                        pass
+                    self.setup_database()
+                    self.verify_database_schema()
+                    stats = self._get_full_db_stats()
+                    print(
+                        f"📊 Loaded: {stats['users']} users | "
+                        f"{stats['channel_games']} games | "
+                        f"{stats['premium_games']} premium | "
+                        f"{stats['purchases_completed']} purchases"
+                    )
                 else:
-                    print(f"✅ Local DB found ({db_size} bytes) — skipping GitHub restore")
+                    local_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+                    if local_size < 4096:
+                        print("ℹ️ No GitHub backup yet and no local DB — starting fresh")
+                    else:
+                        print(f"⚠️ GitHub restore failed — using local DB ({local_size} bytes)")
             else:
-                print("ℹ️ GitHub backup not configured — using local DB only")
-                print("   Set GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME to enable auto-restore")
+                print("⚠️ GitHub backup NOT configured — database will be lost on restart!")
+                print("   Set: GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME")
 
             self.update_games_cache()
             self.recover_uploaded_files()
@@ -1761,11 +1830,10 @@ class CrossPlatformBot:
             try:
                 self.start_keep_alive()
             except Exception as e:
-                print(f"⚠️ Keep-alive failed to start (non-fatal): {e}")
+                print(f"⚠️ Keep-alive failed (non-fatal): {e}")
 
             self._start_auto_backup()
-
-            print("✅ Bot initialization complete!")
+            print("✅ Bot ready!")
             return True
 
         except Exception as e:
@@ -1775,19 +1843,22 @@ class CrossPlatformBot:
 
     def _start_auto_backup(self):
         """
-        Push DB to GitHub every 5 minutes.
-        If DB is empty at backup time, attempt restore from GitHub instead.
+        5-minute safety net — catches any writes that missed their immediate sync.
+        Most writes are already pushed immediately via backup_after_game_action.
+        This loop ensures nothing is ever lost even if an immediate push fails.
+        Also handles: restore if empty DB detected mid-run.
         """
         if not self.github_backup.is_enabled:
-            print("ℹ️ Auto-backup disabled — set GITHUB_TOKEN + GITHUB_REPO_OWNER + GITHUB_REPO_NAME")
+            print("⚠️ GitHub sync disabled — data WILL be lost on restart")
+            print("   Configure GITHUB_TOKEN + GITHUB_REPO_OWNER + GITHUB_REPO_NAME")
             return
 
-        def _backup_loop():
-            time.sleep(30)  # brief initial delay to let startup finish
+        def _loop():
             while True:
+                time.sleep(300)  # every 5 minutes
                 try:
                     if self.github_backup._is_db_empty():
-                        print("⚠️ Auto-backup: DB is empty — attempting GitHub restore instead of backup")
+                        print("⚠️ Safety net: empty DB detected — restoring from GitHub")
                         if self.github_backup.restore_database_from_github():
                             try:
                                 self.conn.close()
@@ -1796,18 +1867,16 @@ class CrossPlatformBot:
                             self.setup_database()
                             self.verify_database_schema()
                             self.update_games_cache()
-                            print("✅ Auto-restored from GitHub successfully")
+                            print("✅ Safety net: restored from GitHub")
                     else:
                         self.github_backup.backup_database_to_github(
-                            f"Auto backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                            f"Safety net backup {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                         )
                 except Exception as e:
-                    print(f"⚠️ Auto-backup/restore error (non-fatal): {e}")
-                time.sleep(300)  # every 5 minutes
+                    print(f"⚠️ Safety net error (non-fatal): {e}")
 
-        t = threading.Thread(target=_backup_loop, daemon=True)
-        t.start()
-        print("⏰ Auto-backup started — every 5 min → GitHub (skips empty DB, restores if empty)")
+        threading.Thread(target=_loop, daemon=True).start()
+        print("🛡️ GitHub sync active — every write pushed immediately + 5-min safety net")
 
     def recover_persistent_sessions(self):
         """Recover persistent sessions from database"""
@@ -2068,26 +2137,28 @@ class CrossPlatformBot:
     # ==================== GITHUB BACKUP INTEGRATION ====================
 
     def backup_after_game_action(self, action_type, game_name=""):
-        """Trigger backup after game-related actions"""
+        """
+        Push DB to GitHub immediately after any data change.
+        Runs in a background thread — never blocks the user response.
+        GitHub is the source of truth; every write must be reflected there.
+        """
         if not self.github_backup.is_enabled:
             return
-        
-        def async_backup():
+
+        def _push():
             try:
-                commit_message = f"Auto backup: {action_type}"
+                msg = f"{action_type}"
                 if game_name:
-                    commit_message += f" - {game_name}"
-                
-                success = self.github_backup.backup_database_to_github(commit_message)
+                    msg += f": {game_name[:80]}"
+                success = self.github_backup.backup_database_to_github(msg)
                 if success:
-                    print(f"✅ Automatic backup completed for: {action_type}")
+                    print(f"✅ GitHub synced — {action_type}")
                 else:
-                    print(f"⚠️ Automatic backup failed for: {action_type}")
+                    print(f"⚠️ GitHub sync failed — {action_type} (will retry in 5 min)")
             except Exception as e:
-                print(f"❌ Backup thread error: {e}")
-        
-        backup_thread = threading.Thread(target=async_backup, daemon=True)
-        backup_thread.start()
+                print(f"❌ GitHub sync error ({action_type}): {e}")
+
+        threading.Thread(target=_push, daemon=True).start()
 
     def show_backup_menu(self, user_id, chat_id, message_id):
         """Show backup management menu for admins"""
@@ -2311,11 +2382,11 @@ The bot will now use the restored data."""
                 ],
                 [
                     {"text": "⭐ Stars Stats", "callback_data": "stars_stats"},
-                    {"text": "💾 Backup System", "callback_data": "backup_menu"}
+                    {"text": "💸 Withdraw Stars", "callback_data": "withdraw_stars_menu"}
                 ],
                 [
-                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"},
-                    {"text": "📊 System Status", "callback_data": "system_status"}
+                    {"text": "💾 Backup System", "callback_data": "backup_menu"},
+                    {"text": "🔄 Redeploy System", "callback_data": "redeploy_panel"}
                 ],
                 [
                     {"text": "👥 Referral Stats", "callback_data": "referral_stats"},
@@ -3088,14 +3159,117 @@ If the issue persists, please contact the admins directly."""
                 elif data == "stars_stats":
                     self.show_stars_stats(user_id, chat_id, message_id)
                     return
+
+            # ── Withdraw Stars (admin only) ───────────────────────────────────
+            elif data == "withdraw_stars_menu":
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                bal = self.stars_system.get_balance()
+                avail = bal['available_stars']
+                usd   = bal['available_usd']
+                text  = (
+                    f"💸 <b>Withdraw Stars</b>\n\n"
+                    f"💰 Available: <b>{avail} ⭐</b> (~${usd:.2f})\n\n"
+                    f"<b>How to withdraw:</b>\n"
+                    f"1. Open the Telegram app\n"
+                    f"2. Go to <b>Settings → My Stars</b>\n"
+                    f"3. Tap <b>Withdraw</b> and follow the steps\n\n"
+                    f"After withdrawing, tap <b>Record Withdrawal</b> below "
+                    f"to keep your balance accurate here.\n\n"
+                    f"<b>Select amount to record:</b>"
+                )
+                # Build amount buttons based on available balance
+                amt_buttons = []
+                for amt in [50, 100, 250, 500, 1000]:
+                    if amt <= avail:
+                        amt_buttons.append({"text": f"{amt} ⭐", "callback_data": f"withdraw_stars_{amt}"})
+                # Custom / full balance
+                row2 = []
+                if avail > 0:
+                    row2.append({"text": f"All ({avail} ⭐)", "callback_data": f"withdraw_stars_{avail}"})
+                keyboard = {"inline_keyboard": []}
+                # chunk amount buttons into rows of 3
+                for i in range(0, len(amt_buttons), 3):
+                    keyboard["inline_keyboard"].append(amt_buttons[i:i+3])
+                if row2:
+                    keyboard["inline_keyboard"].append(row2)
+                keyboard["inline_keyboard"].append(
+                    [{"text": "📊 Stars Stats",  "callback_data": "stars_stats"},
+                     {"text": "🔙 Back to Admin","callback_data": "admin_panel"}]
+                )
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
+
+            elif data.startswith("withdraw_stars_") and not data.startswith("withdraw_stars_menu"):
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                try:
+                    amt = int(data.replace("withdraw_stars_", ""))
+                except ValueError:
+                    return
+                bal = self.stars_system.get_balance()
+                if amt > bal['available_stars']:
+                    self.answer_callback_query(
+                        callback_query['id'],
+                        f"❌ Not enough Stars. Available: {bal['available_stars']}",
+                        True
+                    )
+                    return
+                # Ask for confirmation
+                text = (
+                    f"💸 <b>Record Withdrawal</b>\n\n"
+                    f"Amount: <b>{amt} ⭐</b> (~${amt * 0.013:.2f})\n\n"
+                    f"⚠️ Only tap <b>Confirm</b> <u>after</u> you have completed the "
+                    f"withdrawal in the Telegram app.\n\n"
+                    f"This records the withdrawal here to keep your balance accurate."
+                )
+                keyboard = {"inline_keyboard": [
+                    [{"text": f"✅ Confirm {amt} ⭐ Withdrawn", "callback_data": f"record_withdrawal_{amt}"}],
+                    [{"text": "❌ Cancel", "callback_data": "withdraw_stars_menu"}]
+                ]}
+                self.edit_message(chat_id, message_id, text, keyboard)
+                return
+
+            elif data.startswith("record_withdrawal_"):
+                if not self.is_admin(user_id):
+                    self.answer_callback_query(callback_query['id'], "❌ Access denied.", True)
+                    return
+                try:
+                    amt = int(data.replace("record_withdrawal_", ""))
+                except ValueError:
+                    return
+                ok, msg = self.stars_system.record_withdrawal(user_id, amt, "Manual withdrawal via admin panel")
+                if ok:
+                    bal = self.stars_system.get_balance()
+                    self.edit_message(
+                        chat_id, message_id,
+                        f"✅ <b>Withdrawal Recorded!</b>\n\n"
+                        f"💸 Recorded: <b>{amt} ⭐</b>\n"
+                        f"💰 Remaining balance: <b>{bal['available_stars']} ⭐</b>"
+                        f" (~${bal['available_usd']:.2f})\n\n"
+                        f"The withdrawal has been logged in your history.",
+                        {"inline_keyboard": [
+                            [{"text": "📊 Stars Stats",   "callback_data": "stars_stats"}],
+                            [{"text": "🔙 Back to Admin", "callback_data": "admin_panel"}]
+                        ]}
+                    )
+                    self.backup_after_game_action("Stars Withdrawal", f"{amt} stars by admin {user_id}")
                 else:
+                    self.edit_message(chat_id, message_id, msg, {"inline_keyboard": [
+                        [{"text": "🔙 Back", "callback_data": "withdraw_stars_menu"}]
+                    ]})
+                return
+
+            elif data.startswith("stars_"):
                     stars_str = data.replace("stars_", "")
                     try:
                         stars_amount = int(stars_str)
                         self.process_stars_donation(user_id, chat_id, stars_amount)
                     except ValueError:
                         self.robust_send_message(chat_id, "❌ Invalid stars amount.")
-                return
+                    return
 
             # Game request system callbacks
             elif data == "request_game":
@@ -5113,36 +5287,51 @@ Telegram Stars are a simple way to support developers directly through Telegram.
             return False
     
     def show_stars_stats(self, user_id, chat_id, message_id):
-        """Show stars statistics"""
+        """Show stars statistics — admins also see withdraw button."""
         balance = self.stars_system.get_balance()
-        recent_transactions = self.stars_system.get_recent_transactions(10)
-        
-        stats_text = """📊 <b>Telegram Stars Statistics</b>
+        recent  = self.stars_system.get_recent_transactions(10)
 
-💰 <b>Financial Overview:</b>"""
-        
-        stats_text += f"\n• Total Stars Earned: <b>{balance['total_stars_earned']} ⭐</b>"
-        stats_text += f"\n• Total USD Earned: <b>${balance['total_usd_earned']:.2f}</b>"
-        stats_text += f"\n• Available Stars: <b>{balance['available_stars']} ⭐</b>"
-        stats_text += f"\n• Available USD: <b>${balance['available_usd']:.2f}</b>"
-        stats_text += f"\n• Last Updated: {balance['last_updated'][:16] if balance['last_updated'] else 'Never'}"
-        
-        if recent_transactions:
-            stats_text += "\n\n🎉 <b>Recent Transactions (Top 10):</b>"
-            for i, transaction in enumerate(recent_transactions, 1):
-                donor_name, stars_amount, usd_amount, status, created_at = transaction
-                date_str = datetime.fromisoformat(created_at).strftime('%m/%d %H:%M')
-                status_icon = "✅" if status == 'completed' else "⏳"
-                stats_text += f"\n{i}. {donor_name}: {status_icon} <b>{stars_amount} ⭐ (${usd_amount:.2f})</b> - {date_str}"
-        
-        keyboard = {
-            "inline_keyboard": [
+        stats_text = (
+            f"📊 <b>Telegram Stars Statistics</b>\n\n"
+            f"💰 <b>Balance:</b>\n"
+            f"• Total Earned: <b>{balance['total_stars_earned']} ⭐</b>"
+            f" (${balance['total_usd_earned']:.2f})\n"
+            f"• Available: <b>{balance['available_stars']} ⭐</b>"
+            f" (${balance['available_usd']:.2f})\n"
+        )
+
+        if self.is_admin(user_id):
+            # Show withdrawal history for admins
+            withdrawals = self.stars_system.get_withdrawal_history(5)
+            if withdrawals:
+                stats_text += "\n💸 <b>Recent Withdrawals:</b>\n"
+                for adm, amt, note, dt in withdrawals:
+                    stats_text += f"• {dt[:10]}: {amt} ⭐"
+                    if note:
+                        stats_text += f" — {html.escape(note)}"
+                    stats_text += "\n"
+
+        if recent:
+            stats_text += "\n🎉 <b>Recent Donations (Top 10):</b>\n"
+            for i, (name, amt, usd, status, created_at) in enumerate(recent, 1):
+                dt  = datetime.fromisoformat(created_at).strftime('%m/%d %H:%M')
+                ico = "✅" if status == 'completed' else "⏳"
+                stats_text += f"{i}. {html.escape(name)}: {ico} <b>{amt} ⭐ (${usd:.2f})</b> {dt}\n"
+
+        # Admin sees withdraw button; users see donate button
+        if self.is_admin(user_id):
+            keyboard = {"inline_keyboard": [
+                [{"text": "💸 Withdraw Stars", "callback_data": "withdraw_stars_menu"},
+                 {"text": "🔄 Refresh",         "callback_data": "stars_stats"}],
+                [{"text": "🔙 Back to Admin",   "callback_data": "admin_panel"}]
+            ]}
+        else:
+            keyboard = {"inline_keyboard": [
                 [{"text": "⭐ Donate Stars", "callback_data": "stars_menu"}],
-                [{"text": "🔄 Refresh Stats", "callback_data": "stars_stats"}],
-                [{"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
-            ]
-        }
-        
+                [{"text": "🔄 Refresh",      "callback_data": "stars_stats"},
+                 {"text": "🔙 Back to Menu", "callback_data": "back_to_menu"}]
+            ]}
+
         self.edit_message(chat_id, message_id, stats_text, keyboard)
 
     # ==================== GAME REQUEST METHODS ====================
@@ -5600,6 +5789,17 @@ Use the broadcast feature to send messages to all users."""
                     used_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(code_id, user_id),
                     FOREIGN KEY (code_id) REFERENCES admin_codes(id)
+                )
+            ''')
+
+            # stars_withdrawals table — create if missing
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS stars_withdrawals (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id     INTEGER NOT NULL,
+                    stars_amount INTEGER NOT NULL,
+                    note         TEXT,
+                    withdrawn_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
@@ -6393,6 +6593,16 @@ Always available!
                     used_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(code_id, user_id),
                     FOREIGN KEY (code_id) REFERENCES admin_codes(id)
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS stars_withdrawals (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id     INTEGER NOT NULL,
+                    stars_amount INTEGER NOT NULL,
+                    note         TEXT,
+                    withdrawn_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
