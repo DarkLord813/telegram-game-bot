@@ -77,6 +77,71 @@ print("=" * 50)
 
 _start_time = time.time()  # used by health endpoint
 
+# ── GitHub push lock — prevents concurrent pushes causing 409 Conflict ────────
+_github_push_lock = threading.Lock()
+
+# ==================== STANDALONE GITHUB RESTORE (runs before bot init) ====================
+
+def _github_restore_before_init(db_path):
+    """
+    Pull the database from GitHub and write it to db_path.
+    This runs BEFORE CrossPlatformBot is created, so when setup_database()
+    opens the file it already has real data — not an empty file.
+    Uses only env vars, no bot instance needed.
+    """
+    token      = GITHUB_TOKEN
+    owner      = GITHUB_REPO_OWNER
+    repo       = GITHUB_REPO_NAME
+    branch     = GITHUB_BACKUP_BRANCH
+    file_path  = GITHUB_BACKUP_PATH
+
+    if not all([token,
+                owner not in ('', 'your-username'),
+                repo  not in ('', 'your-repo')]):
+        print("⚠️ GitHub not configured — skipping pre-init restore")
+        return False
+
+    try:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        print(f"🔄 Fetching DB from GitHub before bot init → {owner}/{repo}/{file_path}")
+        r = requests.get(api_url, headers=headers,
+                         params={'ref': branch}, timeout=60)
+        if r.status_code != 200:
+            print(f"⚠️ GitHub pre-init restore: not found ({r.status_code}) — will start fresh")
+            return False
+
+        data = r.json()
+        if data.get('encoding') != 'base64':
+            print(f"❌ Unexpected encoding: {data.get('encoding')}")
+            return False
+
+        db_bytes = base64.b64decode(data['content'].replace('\n', ''))
+
+        # Validate it's a real SQLite file (magic bytes: 53 51 4c 69 74 65)
+        if not db_bytes.startswith(b'SQLite format 3'):
+            print("❌ GitHub file is not a valid SQLite database — ignoring")
+            return False
+
+        # Write to tmp then move so a partial write never corrupts the live DB
+        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else '.', exist_ok=True)
+        tmp = db_path + '.pre_init_tmp'
+        with open(tmp, 'wb') as f:
+            f.write(db_bytes)
+        import shutil
+        shutil.move(tmp, db_path)
+        size_kb = round(len(db_bytes) / 1024, 1)
+        print(f"✅ Pre-init restore complete — {size_kb} KB written to {db_path}")
+        return True
+
+    except Exception as e:
+        print(f"❌ Pre-init GitHub restore failed: {e}")
+        traceback.print_exc()
+        return False
+
 # ==================== STARTUP INFO ====================
 print("🔍 Startup: Python", sys.version.split()[0], "| Dir:", os.getcwd())
 print(f"🔍 BOT_TOKEN: {'SET ✅' if BOT_TOKEN else 'MISSING ❌'}")
@@ -663,60 +728,73 @@ class GitHubBackupSystem:
         except Exception:
             return True  # treat unknown state as empty — safer not to push
 
-    def backup_database_to_github(self, commit_message="Auto backup: Database update"):
-        """Push the current DB to GitHub. Silently skips if DB is empty."""
+    def backup_database_to_github(self, commit_message="Auto backup"):
+        """
+        Push DB to GitHub.
+        - Never pushes empty database.
+        - Uses a global lock so only one push runs at a time (prevents 409 SHA conflicts).
+        - Retries once on 409 (SHA changed between get and put).
+        """
         if not self.is_enabled:
             return False
 
-        # Never push an empty database — if DB is empty, restore instead
         if self._is_db_empty():
-            print("⚠️ GitHub backup skipped — database is empty. Run restore instead.")
+            print("⚠️ Backup skipped — DB is empty. Restore instead.")
             return False
-        try:
-            print("🔄 Starting GitHub backup …")
-            backup_file = self.create_db_backup()
-            if not backup_file:
-                return False
 
-            with open(backup_file, 'rb') as f:
-                db_b64 = base64.b64encode(f.read()).decode('utf-8')
+        with _github_push_lock:
+            for attempt in range(2):  # retry once on 409
+                try:
+                    backup_file = self.create_db_backup()
+                    if not backup_file:
+                        return False
 
-            file_sha = self.get_file_sha()
+                    with open(backup_file, 'rb') as f:
+                        db_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-            # Build a rich commit message with stats
-            try:
-                stats = self.bot._get_full_db_stats()
-                commit_message += (
-                    f" | users:{stats['users']} games:{stats['channel_games']}"
-                    f" purchases:{stats['purchases_completed']} tokens:{stats['total_tokens']}"
-                )
-            except Exception:
-                pass
+                    try:
+                        os.remove(backup_file)
+                    except Exception:
+                        pass
 
-            payload = {
-                'message': commit_message,
-                'content': db_b64,
-                'branch':  self.backup_branch,
-            }
-            if file_sha:
-                payload['sha'] = file_sha
+                    # Always get fresh SHA before pushing (prevents 409)
+                    file_sha = self.get_file_sha()
 
-            r = _tg_session.put(self._api_url, headers=self._headers, json=payload, timeout=60)
+                    try:
+                        stats = self.bot._get_full_db_stats()
+                        msg = (f"{commit_message} | "
+                               f"users:{stats['users']} "
+                               f"games:{stats['channel_games']} "
+                               f"purchases:{stats['purchases_completed']} "
+                               f"tokens:{stats['total_tokens']}")
+                    except Exception:
+                        msg = commit_message
 
-            try:
-                os.remove(backup_file)
-            except Exception:
-                pass
+                    payload = {'message': msg, 'content': db_b64, 'branch': self.backup_branch}
+                    if file_sha:
+                        payload['sha'] = file_sha
 
-            if r.status_code in (200, 201):
-                print(f"✅ DB backed up to GitHub → {r.json().get('commit', {}).get('html_url', 'ok')}")
-                return True
-            else:
-                print(f"❌ GitHub backup failed {r.status_code}: {r.text[:300]}")
-                return False
-        except Exception as e:
-            print(f"❌ GitHub backup error: {e}")
-            return False
+                    r = _tg_session.put(self._api_url, headers=self._headers,
+                                        json=payload, timeout=60)
+
+                    if r.status_code in (200, 201):
+                        print(f"✅ GitHub sync OK — {commit_message}")
+                        return True
+                    elif r.status_code == 409 and attempt == 0:
+                        print("⚠️ GitHub 409 conflict — retrying with fresh SHA")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print(f"❌ GitHub push failed {r.status_code}: {r.text[:200]}")
+                        return False
+
+                except Exception as e:
+                    print(f"❌ GitHub backup error (attempt {attempt+1}): {e}")
+                    if attempt == 0:
+                        time.sleep(2)
+                    else:
+                        return False
+        return False
 
     def restore_database_from_github(self):
         """Download the backup blob from GitHub and replace the local DB."""
@@ -1782,42 +1860,14 @@ class CrossPlatformBot:
     
     def initialize_with_persistence(self):
         """
-        GitHub is the source of truth.
-        On every startup: pull from GitHub unconditionally (if configured).
-        This guarantees no data loss even when /tmp is wiped between restarts.
+        DB is already restored from GitHub before this bot was created.
+        Just warm up the cache, test connection, start keep-alive and backup loop.
         """
         try:
-            print("🔄 Initializing bot...")
+            print("🔄 Warming up bot...")
             db_path = self.get_db_path()
-            print(f"📁 Local DB path: {db_path}")
-
-            if self.github_backup.is_enabled:
-                print("🔄 Fetching latest database from GitHub (source of truth)...")
-                restored = self.github_backup.restore_database_from_github()
-                if restored:
-                    print("✅ Database loaded from GitHub — reconnecting...")
-                    try:
-                        self.conn.close()
-                    except Exception:
-                        pass
-                    self.setup_database()
-                    self.verify_database_schema()
-                    stats = self._get_full_db_stats()
-                    print(
-                        f"📊 Loaded: {stats['users']} users | "
-                        f"{stats['channel_games']} games | "
-                        f"{stats['premium_games']} premium | "
-                        f"{stats['purchases_completed']} purchases"
-                    )
-                else:
-                    local_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
-                    if local_size < 4096:
-                        print("ℹ️ No GitHub backup yet and no local DB — starting fresh")
-                    else:
-                        print(f"⚠️ GitHub restore failed — using local DB ({local_size} bytes)")
-            else:
-                print("⚠️ GitHub backup NOT configured — database will be lost on restart!")
-                print("   Set: GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME")
+            db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+            print(f"📁 DB: {db_path} ({round(db_size/1024,1)} KB)")
 
             self.update_games_cache()
             self.recover_uploaded_files()
@@ -1837,7 +1887,7 @@ class CrossPlatformBot:
             return True
 
         except Exception as e:
-            print(f"❌ Bot initialization failed: {e}")
+            print(f"❌ initialize_with_persistence failed: {e}")
             traceback.print_exc()
             return False
 
@@ -7764,51 +7814,87 @@ def register_webhook(token, public_url):
         print(f"❌ Webhook registration error: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Starting GAMERDROID™ Bot (Choreo / Webhook mode)...")
+    print("🚀 Starting GAMERDROID™ Bot...")
 
-    # Start Flask server (webhook + health) in background thread
+    # ── Step 1: Start Flask (health + webhook) in background ──────────────────
     start_health_check()
-    time.sleep(2)
+    time.sleep(1)
 
     if not BOT_TOKEN:
-        print("❌ No BOT_TOKEN — bot cannot start.")
-    else:
-        # Register webhook with Telegram if a public URL is available
-        if PUBLIC_URL:
-            register_webhook(BOT_TOKEN, PUBLIC_URL)
+        print("❌ BOT_TOKEN not set — cannot start.")
+        while True:
+            time.sleep(60)
+
+    # ── Step 2: Determine DB path ──────────────────────────────────────────────
+    _data_dir = os.environ.get('DATA_DIR', '').strip()
+    if not _data_dir:
+        if os.path.isdir('/data') and os.access('/data', os.W_OK):
+            _data_dir = '/data'
         else:
-            print("⚠️ No PUBLIC_URL/CHOREO_URL set — webhook not registered automatically.")
-            print("   Set CHOREO_URL to your service's public URL in Choreo environment variables.")
+            _data_dir = '/tmp'
+    os.makedirs(_data_dir, exist_ok=True)
+    _db_path = os.path.join(_data_dir, DB_NAME)
+    print(f"📁 DB path: {_db_path}")
 
-        # Create the bot ONCE and never recreate it.
-        # The restart loop was the root cause of games being cleared:
-        # each new CrossPlatformBot() opened a fresh DB connection and if
-        # setup_database() hit any error it fell back to :memory:, wiping all data.
+    # ── Step 3: ALWAYS restore from GitHub BEFORE creating the bot ────────────
+    # Key fix: CrossPlatformBot.__init__ calls setup_database() which opens the
+    # DB file. By restoring BEFORE __init__, setup_database() opens real data.
+    if GITHUB_TOKEN and GITHUB_REPO_OWNER not in ('', 'your-username'):
+        print("🔄 Restoring DB from GitHub before bot init...")
+        _restored = _github_restore_before_init(_db_path)
+        if _restored:
+            try:
+                _chk = sqlite3.connect(_db_path)
+                _c   = _chk.cursor()
+                _c.execute('SELECT COUNT(*) FROM users')
+                _u = _c.fetchone()[0]
+                _c.execute('SELECT COUNT(*) FROM channel_games')
+                _g = _c.fetchone()[0]
+                _chk.close()
+                print(f"✅ Restore verified: {_u} users, {_g} games")
+            except Exception as _e:
+                print(f"⚠️ Restore check: {_e}")
+        else:
+            print("ℹ️ No GitHub backup yet — starting fresh")
+    else:
+        print("⚠️ GitHub not configured — data WILL be lost on restart!")
+        print("   Set GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME")
+
+    # ── Step 4: Register webhook ───────────────────────────────────────────────
+    if PUBLIC_URL:
+        register_webhook(BOT_TOKEN, PUBLIC_URL)
+    else:
+        print("⚠️ No PUBLIC_URL/CHOREO_URL — webhook not auto-registered")
+
+    # ── Step 5: Create bot ONCE — setup_database() opens the restored file ────
+    try:
+        print("🤖 Creating bot instance...")
+        bot_instance = CrossPlatformBot(BOT_TOKEN)
+        bot_instance.initialize_with_persistence()
+
         try:
-            print("🔄 Initialising bot...")
-            bot_instance = CrossPlatformBot(BOT_TOKEN)
+            stats = bot_instance._get_full_db_stats()
+            print(
+                f"📊 Ready: {stats['users']} users | {stats['channel_games']} games | "
+                f"{stats['premium_games']} premium | {stats['purchases_completed']} purchases | "
+                f"{stats['total_tokens']} tokens"
+            )
+        except Exception:
+            pass
 
-            if not bot_instance.initialize_with_persistence():
-                print("❌ Persistence init failed — continuing anyway with existing DB.")
+        print("✅ Bot live — POST /webhook  |  GET /health")
 
-            print("✅ Bot is live and listening for webhook updates!")
-            print(f"📡 Webhook endpoint: POST /webhook")
-            print(f"💚 Health endpoint:  GET  /health")
+        while True:
+            time.sleep(60)
 
-            # Keep the main thread alive forever — updates arrive via Flask webhook.
-            # Never exit: Choreo/Render will handle restarts at the process level if needed.
-            while True:
-                time.sleep(60)
-                print(f"💚 Bot alive — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-        except KeyboardInterrupt:
-            print("\n🛑 Bot stopped by user.")
-        except Exception as e:
-            print(f"💥 Bot init error: {e}")
-            traceback.print_exc()
-            # Keep process alive so Flask (health endpoint) still responds
-            print("⚠️ Bot init failed but keeping process alive for health checks.")
-            while True:
-                time.sleep(60)
+    except KeyboardInterrupt:
+        print("\n🛑 Stopped.")
+    except Exception as e:
+        print(f"💥 Bot startup error: {e}")
+        traceback.print_exc()
+        print("⚠️ Keeping process alive for health checks...")
+        while True:
+            time.sleep(60)
 
     print("🔴 Bot service ended.")
+
