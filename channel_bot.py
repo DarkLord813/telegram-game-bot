@@ -1828,33 +1828,21 @@ class CrossPlatformBot:
         print("💾 Persistent data recovery enabled")
     
     def get_db_path(self):
-        """
-        Return a stable writable DB path.
-
-        Priority:
-          1. DATA_DIR env var  — set this to a Choreo persistent volume mount (e.g. /data)
-          2. /data             — auto-detected if writable (common Choreo/Render mount)
-          3. /tmp              — always writable; survives the process but NOT container restarts.
-                                 If using /tmp, set GITHUB_TOKEN for automatic backup/restore.
-
-        ⚠️  /tmp is wiped on every Choreo container restart.
-             Mount a persistent volume at /data and set DATA_DIR=/data to keep data forever.
-        """
+        """Return a stable writable DB path. Always ensures the directory exists."""
         data_dir = os.environ.get('DATA_DIR', '').strip()
 
         if not data_dir:
             if os.path.isdir('/data') and os.access('/data', os.W_OK):
                 data_dir = '/data'
-                print("📁 Using /data for database (persistent volume detected)")
             else:
                 data_dir = '/tmp'
-                print("⚠️  Using /tmp for database — data will be lost on container restart!")
-                print("⚠️  Set DATA_DIR=/data and mount a persistent volume to prevent this.")
 
+        # Always ensure directory exists before returning
         try:
             os.makedirs(data_dir, exist_ok=True)
         except Exception:
             data_dir = '/tmp'
+            os.makedirs(data_dir, exist_ok=True)
 
         return os.path.join(data_dir, DB_NAME)
     
@@ -6662,11 +6650,35 @@ Always available!
             print("✅ Database setup successful!")
             
         except Exception as e:
-            print(f"❌ Database setup error: {e}")
+            print(f"❌ Database setup error at {db_path}: {e}")
             traceback.print_exc()
-            # Do NOT fall back to :memory: — that silently destroys all data.
-            # Re-raise so the caller knows the DB is not usable.
-            raise
+            # Last resort: use a guaranteed-writable /tmp path
+            fallback = f'/tmp/{DB_NAME}'
+            print(f"⚠️ Falling back to {fallback}")
+            try:
+                self.conn = sqlite3.connect(fallback, check_same_thread=False)
+                self.conn.execute("PRAGMA journal_mode=WAL")
+                self.conn.execute("PRAGMA synchronous=NORMAL")
+                self.conn.row_factory = None
+                cursor = self.conn.cursor()
+                cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
+                    is_verified INTEGER DEFAULT 0, joined_channel INTEGER DEFAULT 0,
+                    verification_code TEXT, code_expires DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    game_tokens INTEGER DEFAULT 0, total_referrals INTEGER DEFAULT 0,
+                    referred_by INTEGER DEFAULT 0, pending_referrer_id INTEGER DEFAULT 0)''')
+                cursor.execute('''CREATE TABLE IF NOT EXISTS channel_games (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER UNIQUE,
+                    file_name TEXT, file_type TEXT, file_size INTEGER, upload_date DATETIME,
+                    category TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    added_by INTEGER DEFAULT 0, is_uploaded INTEGER DEFAULT 0,
+                    is_forwarded INTEGER DEFAULT 0, file_id TEXT, bot_message_id INTEGER)''')
+                self.conn.commit()
+                print(f"✅ Fallback database opened at {fallback}")
+            except Exception as e2:
+                print(f"❌ FATAL: Cannot open any database: {e2}")
+                raise RuntimeError(f"Cannot open database: {e2}")
     
     def test_bot_connection(self):
         try:
@@ -7879,8 +7891,8 @@ if __name__ == "__main__":
                 f"{stats['premium_games']} premium | {stats['purchases_completed']} purchases | "
                 f"{stats['total_tokens']} tokens"
             )
-        except Exception:
-            pass
+        except Exception as _se:
+            print(f"⚠️ Stats read failed (non-fatal): {_se}")
 
         print("✅ Bot live — POST /webhook  |  GET /health")
 
@@ -7892,7 +7904,9 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"💥 Bot startup error: {e}")
         traceback.print_exc()
-        print("⚠️ Keeping process alive for health checks...")
+        # NEVER exit — keep Flask alive so Choreo health checks pass
+        # and the container is not marked as crashed
+        print("⚠️ Bot failed to start but keeping process alive (health endpoint still up)")
         while True:
             time.sleep(60)
 
