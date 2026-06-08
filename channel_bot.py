@@ -127,7 +127,12 @@ def _github_restore_before_init(db_path):
             return False
 
         # Write to tmp then move so a partial write never corrupts the live DB
-        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else '.', exist_ok=True)
+        try:
+            parent = os.path.dirname(db_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+        except Exception:
+            pass  # /tmp always exists; other dirs may be read-only
         tmp = db_path + '.pre_init_tmp'
         with open(tmp, 'wb') as f:
             f.write(db_bytes)
@@ -1828,21 +1833,21 @@ class CrossPlatformBot:
         print("💾 Persistent data recovery enabled")
     
     def get_db_path(self):
-        """Return a stable writable DB path. Always ensures the directory exists."""
+        """Return a writable DB path. Always falls back to /tmp — never crashes."""
         data_dir = os.environ.get('DATA_DIR', '').strip()
 
-        if not data_dir:
-            if os.path.isdir('/data') and os.access('/data', os.W_OK):
-                data_dir = '/data'
-            else:
+        if data_dir:
+            # Verify the configured dir is actually writable
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+                _test = os.path.join(data_dir, '.write_test')
+                with open(_test, 'w') as f:
+                    f.write('ok')
+                os.remove(_test)
+            except Exception:
                 data_dir = '/tmp'
-
-        # Always ensure directory exists before returning
-        try:
-            os.makedirs(data_dir, exist_ok=True)
-        except Exception:
+        else:
             data_dir = '/tmp'
-            os.makedirs(data_dir, exist_ok=True)
 
         return os.path.join(data_dir, DB_NAME)
     
@@ -7837,14 +7842,27 @@ if __name__ == "__main__":
         while True:
             time.sleep(60)
 
-    # ── Step 2: Determine DB path ──────────────────────────────────────────────
+    # ── Step 2: Determine DB path — always use /tmp on Choreo ────────────────
+    # Choreo containers don't have writable /data unless a volume is mounted.
+    # Use DATA_DIR env var if set, otherwise always use /tmp (safe on all systems).
     _data_dir = os.environ.get('DATA_DIR', '').strip()
-    if not _data_dir:
-        if os.path.isdir('/data') and os.access('/data', os.W_OK):
-            _data_dir = '/data'
-        else:
+    if _data_dir:
+        # Try the configured dir, fall back to /tmp if not writable
+        try:
+            os.makedirs(_data_dir, exist_ok=True)
+            # Verify it's actually writable with a test write
+            _test = os.path.join(_data_dir, '.write_test')
+            with open(_test, 'w') as _f:
+                _f.write('ok')
+            os.remove(_test)
+            print(f"📁 Using configured DATA_DIR: {_data_dir}")
+        except Exception as _de:
+            print(f"⚠️ DATA_DIR '{_data_dir}' not writable ({_de}) — using /tmp")
             _data_dir = '/tmp'
-    os.makedirs(_data_dir, exist_ok=True)
+    else:
+        _data_dir = '/tmp'
+        print("📁 Using /tmp for database (GitHub backup will restore on restart)")
+
     _db_path = os.path.join(_data_dir, DB_NAME)
     print(f"📁 DB path: {_db_path}")
 
